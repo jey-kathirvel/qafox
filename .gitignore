@@ -1,0 +1,103 @@
+# QAFox — Git ignore rules
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# Packaging
+build/
+dist/
+wheelhouse/
+*.egg-info/
+*.egg
+
+# Runtime state and logs
+*.log
+*.pid
+*.pid.lock
+*.sock
+logs/
+run/
+tmp/
+temp/
+.cache/
+
+# Private uploads and generated QAFox data
+data/
+uploads/
+backups/
+instance/
+reports/
+test-results/
+execution-results/
+
+# Local databases and database exports
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.backup
+*.sql.gz
+
+# Uploaded archives (allow committed test fixtures)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+!tests/fixtures/**
+
+# Frontend tooling (if added later)
+node_modules/
+.next/
+.nuxt/
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local deployment overrides
+docker-compose.override.yml
+*.local.service
+

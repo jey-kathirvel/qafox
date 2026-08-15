@@ -1,0 +1,807 @@
+import base64
+import html
+import os
+import secrets
+import smtplib
+from datetime import datetime, timezone
+from email.message import EmailMessage
+from urllib.parse import quote
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from pwdlib import PasswordHash
+from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, or_
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from starlette.middleware.sessions import SessionMiddleware
+
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+SECRET_KEY = os.environ["QAFOX_SECRET_KEY"]
+DOMAIN = os.getenv("QAFOX_DOMAIN", "qafox.ads-ai.in")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME)
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "QAFox")
+SMTP_PASSWORD = base64.b64decode(
+    os.environ["SMTP_PASSWORD_B64"]
+).decode("utf-8")
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+
+password_hash = PasswordHash.recommended()
+serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(150))
+    username: Mapped[str] = mapped_column(
+        String(50), unique=True, index=True
+    )
+    email: Mapped[str] = mapped_column(
+        String(320), unique=True, index=True
+    )
+    mobile: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    password_digest: Mapped[str] = mapped_column(String(500))
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+Base.metadata.create_all(engine)
+
+app = FastAPI(
+    title="QAFox",
+    docs_url=None,
+    redoc_url=None,
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    session_cookie="qafox_session",
+    max_age=60 * 60 * 8,
+    same_site="lax",
+    https_only=True,
+)
+
+
+def esc(value: str | None) -> str:
+    return html.escape(value or "", quote=True)
+
+
+def csrf_token(request: Request) -> str:
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = token
+    return token
+
+
+def csrf_valid(request: Request, submitted: str) -> bool:
+    expected = request.session.get("csrf_token", "")
+    return bool(expected) and secrets.compare_digest(
+        expected, submitted
+    )
+
+
+def current_user(request: Request) -> User | None:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return None
+
+    with Session(engine) as db:
+        return db.get(User, int(user_id))
+
+
+def send_email(
+    recipient: str,
+    subject: str,
+    text_body: str,
+) -> None:
+    message = EmailMessage()
+    message["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(text_body)
+
+    with smtplib.SMTP_SSL(
+        SMTP_HOST,
+        SMTP_PORT,
+        timeout=20,
+    ) as smtp:
+        smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        smtp.send_message(message)
+
+
+def send_verification(user: User) -> None:
+    token = serializer.dumps(
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "purpose": "verify-email",
+        },
+        salt="qafox-email-verification",
+    )
+    url = f"https://{DOMAIN}/verify-email?token={quote(token)}"
+
+    send_email(
+        user.email,
+        "Verify your QAFox email address",
+        f"""Hello {user.full_name},
+
+Welcome to QAFox.
+
+Verify your email address using this secure link:
+
+{url}
+
+This link expires in 24 hours.
+
+If you did not create this account, ignore this email.
+
+QAFox
+Hunt Issues. Ship Quality.
+""",
+    )
+
+
+def layout(
+    title: str,
+    content: str,
+    request: Request,
+    public: bool = True,
+) -> HTMLResponse:
+    user = current_user(request)
+    account = ""
+
+    if user:
+        account = f"""
+        <div class="user-menu">
+            <span>{esc(user.full_name[:1].upper())}</span>
+            <div>
+                <strong>{esc(user.full_name)}</strong>
+                <small>@{esc(user.username)}</small>
+            </div>
+            <a href="/logout">Logout</a>
+        </div>
+        """
+
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+<title>{esc(title)} · QAFox</title>
+<meta name="description"
+      content="Private quality engineering workspace">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+    <a class="brand" href="/">
+        <span class="fox-logo">🦊</span>
+        <strong>QA<span>Fox</span></strong>
+    </a>
+    {account}
+</header>
+<main class="{'public-main' if public else 'dashboard-main'}">
+{content}
+</main>
+<footer>
+    <span>© 2026 QAFox</span>
+    <span>Your private quality engineering workspace.</span>
+</footer>
+</body>
+</html>"""
+    )
+
+
+def auth_message(message: str, kind: str = "info") -> str:
+    if not message:
+        return ""
+    return f'<div class="message {kind}">{esc(message)}</div>'
+
+
+@app.get("/health")
+def health():
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+        return {
+            "status": "healthy",
+            "service": "qafox",
+            "database": "connected",
+        }
+    except Exception:
+        return JSONResponse(
+            {
+                "status": "unhealthy",
+                "service": "qafox",
+                "database": "unavailable",
+            },
+            status_code=503,
+        )
+
+
+@app.get("/")
+def home(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
+
+    content = """
+<section class="hero">
+    <div>
+        <span class="pill">PRIVACY-FIRST QUALITY ENGINEERING</span>
+        <h1>Hunt issues.<br><em>Ship quality.</em></h1>
+        <p>
+            Discover and test APIs today. Expand into manual,
+            automation, security, performance and accessibility
+            testing tomorrow.
+        </p>
+        <div class="hero-actions">
+            <a class="primary-button" href="/signup">
+                Create private workspace
+            </a>
+            <a class="outline-button" href="/login">
+                Sign in
+            </a>
+        </div>
+        <div class="trust-row">
+            <span>✓ Private projects</span>
+            <span>✓ Encrypted transport</span>
+            <span>✓ Isolated workspaces</span>
+        </div>
+    </div>
+    <div class="qubi-card">
+        <div class="bubble">Ready to hunt some bugs?</div>
+        <div class="qubi">🦊</div>
+        <strong>Meet Qubi</strong>
+        <small>Your friendly quality guide</small>
+    </div>
+</section>
+
+<section class="toolkit">
+    <div class="section-heading">
+        <span>QUALITY ENGINEERING PLATFORM</span>
+        <h2>One workspace. Every testing discipline.</h2>
+    </div>
+    <div class="cards">
+        <article class="active-card">
+            <i>↗</i><b>Available first</b>
+            <h3>API Testing</h3>
+            <p>API discovery, audit, execution and detailed reports.</p>
+        </article>
+        <article>
+            <i>✓</i><b>Coming next</b>
+            <h3>Manual Testing</h3>
+            <p>Test cases, plans, execution, evidence and traceability.</p>
+        </article>
+        <article>
+            <i>⚙</i><b>Roadmap</b>
+            <h3>Automation Testing</h3>
+            <p>Web and mobile automation with reusable test suites.</p>
+        </article>
+        <article>
+            <i>♢</i><b>Roadmap</b>
+            <h3>Security Testing</h3>
+            <p>OWASP checks, secrets detection and dependency insights.</p>
+        </article>
+        <article>
+            <i>ϟ</i><b>Roadmap</b>
+            <h3>Performance Testing</h3>
+            <p>Load, stress, spike and response-time analysis.</p>
+        </article>
+        <article>
+            <i>◉</i><b>Roadmap</b>
+            <h3>Accessibility</h3>
+            <p>Inclusive experience checks and actionable guidance.</p>
+        </article>
+    </div>
+</section>
+"""
+    return layout("Quality Engineering Platform", content, request)
+
+
+@app.get("/signup")
+def signup_page(request: Request, message: str = ""):
+    token = csrf_token(request)
+    content = f"""
+<section class="auth-shell">
+    <div class="auth-art">
+        <span class="pill">PRIVATE BY DEFAULT</span>
+        <h1>Create your private<br>QAFox workspace.</h1>
+        <p>
+            Project files, credentials and reports remain isolated
+            within your account.
+        </p>
+        <div class="privacy-box">
+            <strong>🛡 Your code is not our content.</strong>
+            <small>
+                QAFox does not use uploaded project data for
+                advertising or AI-model training.
+            </small>
+        </div>
+    </div>
+
+    <form class="auth-card" method="post" action="/signup">
+        <span class="auth-kicker">GET STARTED</span>
+        <h2>Create account</h2>
+        <p>Start with a secure private workspace.</p>
+        {auth_message(message, "error")}
+
+        <input type="hidden" name="csrf"
+               value="{esc(token)}">
+
+        <label>Full name
+            <input name="full_name" required maxlength="150"
+                   autocomplete="name">
+        </label>
+
+        <label>Username
+            <input name="username" required minlength="4"
+                   maxlength="50" autocomplete="username"
+                   pattern="[A-Za-z0-9_.-]+">
+        </label>
+
+        <label>Email address
+            <input type="email" name="email" required
+                   maxlength="320" autocomplete="email">
+        </label>
+
+        <label>Mobile number <small>Optional</small>
+            <input name="mobile" maxlength="30"
+                   autocomplete="tel">
+        </label>
+
+        <label>Password
+            <input type="password" name="password" required
+                   minlength="12" maxlength="128"
+                   autocomplete="new-password">
+        </label>
+
+        <label>Confirm password
+            <input type="password" name="confirm_password"
+                   required minlength="12" maxlength="128"
+                   autocomplete="new-password">
+        </label>
+
+        <label class="checkbox">
+            <input type="checkbox" name="accept_terms"
+                   value="yes" required>
+            <span>
+                I accept the Terms and Privacy Policy.
+            </span>
+        </label>
+
+        <button class="primary-button full" type="submit">
+            Create secure workspace
+        </button>
+
+        <div class="auth-links">
+            Already registered? <a href="/login">Sign in</a>
+        </div>
+    </form>
+</section>
+"""
+    return layout("Create account", content, request)
+
+
+@app.post("/signup")
+def signup(
+    request: Request,
+    full_name: str = Form(...),
+    username: str = Form(...),
+    email: str = Form(...),
+    mobile: str = Form(""),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    accept_terms: str = Form(""),
+    csrf: str = Form(...),
+):
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            "/signup?message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    full_name = full_name.strip()
+    username = username.strip().lower()
+    email = email.strip().lower()
+    mobile = mobile.strip() or None
+
+    if len(full_name) < 2:
+        return RedirectResponse(
+            "/signup?message=Enter+your+full+name.",
+            status_code=303,
+        )
+
+    if (
+        len(username) < 4
+        or not all(
+            char.isalnum() or char in "_.-"
+            for char in username
+        )
+    ):
+        return RedirectResponse(
+            "/signup?message=Choose+a+valid+username.",
+            status_code=303,
+        )
+
+    if len(password) < 12:
+        return RedirectResponse(
+            "/signup?message=Password+must+have+at+least+12+characters.",
+            status_code=303,
+        )
+
+    if password != confirm_password:
+        return RedirectResponse(
+            "/signup?message=Passwords+do+not+match.",
+            status_code=303,
+        )
+
+    if accept_terms != "yes":
+        return RedirectResponse(
+            "/signup?message=Accept+the+Terms+and+Privacy+Policy.",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        existing = db.query(User).filter(
+            or_(
+                User.username == username,
+                User.email == email,
+            )
+        ).first()
+
+        if existing:
+            return RedirectResponse(
+                "/signup?message=An+account+already+uses+that+username+or+email.",
+                status_code=303,
+            )
+
+        user = User(
+            full_name=full_name,
+            username=username,
+            email=email,
+            mobile=mobile,
+            password_digest=password_hash.hash(password),
+            email_verified=False,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        try:
+            send_verification(user)
+        except Exception:
+            db.delete(user)
+            db.commit()
+            return RedirectResponse(
+                "/signup?message=We+could+not+send+the+verification+email.+Check+the+mailbox+configuration.",
+                status_code=303,
+            )
+
+    request.session.clear()
+
+    return RedirectResponse(
+        "/login?message=Verification+email+sent.+Please+verify+your+email.",
+        status_code=303,
+    )
+
+
+@app.get("/verify-email")
+def verify_email(request: Request, token: str):
+    try:
+        data = serializer.loads(
+            token,
+            salt="qafox-email-verification",
+            max_age=86400,
+        )
+    except SignatureExpired:
+        return RedirectResponse(
+            "/login?message=Verification+link+expired.",
+            status_code=303,
+        )
+    except BadSignature:
+        return RedirectResponse(
+            "/login?message=Invalid+verification+link.",
+            status_code=303,
+        )
+
+    if data.get("purpose") != "verify-email":
+        return RedirectResponse(
+            "/login?message=Invalid+verification+request.",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        user = db.get(User, int(data["user_id"]))
+
+        if (
+            not user
+            or user.email != data.get("email")
+            or not user.is_active
+        ):
+            return RedirectResponse(
+                "/login?message=Account+could+not+be+verified.",
+                status_code=303,
+            )
+
+        user.email_verified = True
+        db.commit()
+
+    return RedirectResponse(
+        "/login?message=Email+verified.+You+can+now+sign+in.",
+        status_code=303,
+    )
+
+
+@app.get("/login")
+def login_page(request: Request, message: str = ""):
+    token = csrf_token(request)
+    content = f"""
+<section class="auth-shell login-shell">
+    <div class="auth-art">
+        <span class="pill">WELCOME BACK</span>
+        <h1>Your private quality<br>workspace awaits.</h1>
+        <p>
+            Continue API testing and build complete
+            quality confidence with Qubi.
+        </p>
+        <div class="login-qubi">🦊</div>
+    </div>
+
+    <form class="auth-card" method="post" action="/login">
+        <span class="auth-kicker">SECURE SIGN IN</span>
+        <h2>Welcome back</h2>
+        <p>Use your username or verified email address.</p>
+        {auth_message(message)}
+
+        <input type="hidden" name="csrf"
+               value="{esc(token)}">
+
+        <label>Username or email
+            <input name="identity" required maxlength="320"
+                   autocomplete="username">
+        </label>
+
+        <label>Password
+            <input type="password" name="password" required
+                   maxlength="128"
+                   autocomplete="current-password">
+        </label>
+
+        <button class="primary-button full" type="submit">
+            Sign in securely
+        </button>
+
+        <div class="auth-links split">
+            <a href="/forgot-password">Forgot password?</a>
+            <a href="/forgot-username">Forgot username?</a>
+        </div>
+
+        <div class="auth-links">
+            New to QAFox? <a href="/signup">Create account</a>
+        </div>
+    </form>
+</section>
+"""
+    return layout("Sign in", content, request)
+
+
+@app.post("/login")
+def login(
+    request: Request,
+    identity: str = Form(...),
+    password: str = Form(...),
+    csrf: str = Form(...),
+):
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            "/login?message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    identity = identity.strip().lower()
+
+    with Session(engine) as db:
+        user = db.query(User).filter(
+            or_(
+                User.username == identity,
+                User.email == identity,
+            )
+        ).first()
+
+        valid = bool(
+            user
+            and user.is_active
+            and password_hash.verify(
+                password,
+                user.password_digest,
+            )
+        )
+
+        if not valid:
+            return RedirectResponse(
+                "/login?message=Invalid+username,+email+or+password.",
+                status_code=303,
+            )
+
+        if not user.email_verified:
+            return RedirectResponse(
+                "/login?message=Verify+your+email+before+signing+in.",
+                status_code=303,
+            )
+
+        user.last_login_at = datetime.now(timezone.utc)
+        db.commit()
+
+        request.session.clear()
+        request.session["user_id"] = user.id
+        request.session["csrf_token"] = secrets.token_urlsafe(32)
+
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.get("/forgot-password")
+def forgot_password(request: Request):
+    content = """
+<section class="simple-card">
+    <div class="big-icon">🔐</div>
+    <h1>Password recovery</h1>
+    <p>
+        Secure password-reset delivery will be enabled in
+        PATCH-QAFOX-002. Your existing password cannot be viewed
+        by QAFox administrators.
+    </p>
+    <a class="primary-button" href="/login">Return to sign in</a>
+</section>
+"""
+    return layout("Password recovery", content, request)
+
+
+@app.get("/forgot-username")
+def forgot_username(request: Request):
+    content = """
+<section class="simple-card">
+    <div class="big-icon">✉️</div>
+    <h1>Username recovery</h1>
+    <p>
+        Email-based username recovery will be enabled in
+        PATCH-QAFOX-002 without revealing whether an account exists.
+    </p>
+    <a class="primary-button" href="/login">Return to sign in</a>
+</section>
+"""
+    return layout("Username recovery", content, request)
+
+
+@app.get("/dashboard")
+def dashboard(request: Request):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    content = f"""
+<section class="dashboard-header">
+    <div>
+        <span>PRIVATE QUALITY ENGINEERING WORKSPACE</span>
+        <h1>Good to see you, {esc(user.full_name)}! 👋</h1>
+        <p>
+            API Testing is your first active QAFox module.
+        </p>
+    </div>
+    <a class="primary-button" href="/projects/new">
+        + New project
+    </a>
+</section>
+
+<section class="dashboard-grid">
+    <article class="welcome-panel">
+        <span>PHASE 1 · API TESTING</span>
+        <h2>Upload. Discover. Test. Report.</h2>
+        <p>
+            Bring a ZIP, TAR, project folder, OpenAPI document or
+            Postman collection. Qubi will discover the APIs and
+            prepare a detailed test inventory.
+        </p>
+        <a class="primary-button" href="/projects/new">
+            Upload first project
+        </a>
+        <div class="dashboard-qubi">🦊</div>
+    </article>
+
+    <article class="privacy-panel">
+        <span>🛡</span>
+        <h3>Your workspace is private</h3>
+        <p>
+            Project access is bound to your authenticated account.
+            Cross-user project visibility is prohibited.
+        </p>
+    </article>
+</section>
+
+<section class="dashboard-tools">
+    <h2>Your quality toolkit</h2>
+    <div class="cards">
+        <article class="active-card">
+            <i>↗</i><b>Active</b>
+            <h3>API Testing</h3>
+            <p>Discovery, auditing, execution and reports.</p>
+        </article>
+        <article>
+            <i>✓</i><b>Coming next</b>
+            <h3>Manual Testing</h3>
+            <p>Cases, plans, evidence and traceability.</p>
+        </article>
+        <article>
+            <i>⚙</i><b>Roadmap</b>
+            <h3>Automation Testing</h3>
+            <p>Web and mobile automated test suites.</p>
+        </article>
+    </div>
+</section>
+"""
+    return layout("Dashboard", content, request, public=False)
+
+
+@app.get("/projects/new")
+def new_project(request: Request):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    content = """
+<section class="simple-card">
+    <div class="big-icon">📁</div>
+    <span class="pill dark">API TESTING · PHASE 1</span>
+    <h1>Secure project upload</h1>
+    <p>
+        Private ZIP, TAR, folder and API-definition uploads will
+        arrive in PATCH-QAFOX-002 with isolated extraction,
+        ownership enforcement and automatic secret masking.
+    </p>
+    <a class="primary-button" href="/dashboard">
+        Return to dashboard
+    </a>
+</section>
+"""
+    return layout("New project", content, request, public=False)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie("qafox_session")
+    return response

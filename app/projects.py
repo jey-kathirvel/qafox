@@ -1,0 +1,1429 @@
+import hashlib
+import json
+import os
+import shutil
+import stat
+import tarfile
+import uuid
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+
+import yaml
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+)
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.main import (
+    csrf_token,
+    csrf_valid,
+    current_user,
+    engine,
+    esc,
+    layout,
+)
+
+router = APIRouter()
+
+PROJECT_ROOT = Path("/opt/qafox/data/projects")
+STAGING_ROOT = Path("/opt/qafox/data/staging")
+
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 10_000
+MAX_SINGLE_ENTRY_BYTES = 150 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 150
+
+ALLOWED_ENVIRONMENTS = {
+    "development",
+    "testing",
+    "staging",
+    "production",
+}
+
+TEXT_API_SUFFIXES = {
+    ".json",
+    ".yaml",
+    ".yml",
+}
+
+ARCHIVE_SUFFIXES = {
+    ".zip",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+}
+
+IGNORED_ARCHIVE_NAMES = {
+    ".DS_Store",
+    "Thumbs.db",
+}
+
+
+class UploadRejected(Exception):
+    pass
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def human_size(value: int | None) -> str:
+    size = float(value or 0)
+
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+    return f"{size:.1f} GB"
+
+
+def safe_filename(filename: str | None) -> str:
+    cleaned = Path(filename or "project-upload").name
+    cleaned = "".join(
+        character
+        if (
+            character.isalnum()
+            or character in "._- ()"
+        )
+        else "_"
+        for character in cleaned
+    ).strip(" .")
+
+    if not cleaned:
+        cleaned = "project-upload"
+
+    return cleaned[:220]
+
+
+def detect_file_type(filename: str) -> str:
+    lower = filename.lower()
+
+    if lower.endswith(".tar.gz"):
+        return "tar.gz"
+
+    if lower.endswith(".tgz"):
+        return "tgz"
+
+    if lower.endswith(".zip"):
+        return "zip"
+
+    if lower.endswith(".tar"):
+        return "tar"
+
+    if lower.endswith(".json"):
+        return "json"
+
+    if lower.endswith(".yaml"):
+        return "yaml"
+
+    if lower.endswith(".yml"):
+        return "yml"
+
+    raise UploadRejected(
+        "Unsupported file type. Upload ZIP, TAR, TAR.GZ, "
+        "TGZ, JSON, YAML or YML."
+    )
+
+
+def safe_relative_path(member_name: str) -> Path:
+    normalized = member_name.replace("\\", "/")
+
+    if "\x00" in normalized:
+        raise UploadRejected(
+            "Archive contains an invalid null-byte path."
+        )
+
+    pure = PurePosixPath(normalized)
+
+    if pure.is_absolute():
+        raise UploadRejected(
+            "Archive contains an absolute path."
+        )
+
+    parts = [
+        part
+        for part in pure.parts
+        if part not in ("", ".")
+    ]
+
+    if (
+        not parts
+        or any(part == ".." for part in parts)
+        or any(":" in part for part in parts)
+    ):
+        raise UploadRejected(
+            "Archive contains an unsafe traversal path."
+        )
+
+    return Path(*parts)
+
+
+def ensure_inside(
+    destination_root: Path,
+    candidate: Path,
+) -> None:
+    root = destination_root.resolve()
+    resolved = candidate.resolve()
+
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise UploadRejected(
+            "Archive attempted to write outside its workspace."
+        ) from exc
+
+
+async def save_upload(
+    upload: UploadFile,
+    destination: Path,
+) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    total = 0
+
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with destination.open("wb") as output:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+
+            if not chunk:
+                break
+
+            total += len(chunk)
+
+            if total > MAX_UPLOAD_BYTES:
+                raise UploadRejected(
+                    "Upload exceeds the 100 MB limit."
+                )
+
+            digest.update(chunk)
+            output.write(chunk)
+
+    if total == 0:
+        raise UploadRejected(
+            "The uploaded file is empty."
+        )
+
+    return total, digest.hexdigest()
+
+
+def validate_json_or_yaml(
+    source: Path,
+    file_type: str,
+    extracted_root: Path,
+) -> tuple[int, int, str]:
+    if source.stat().st_size > 25 * 1024 * 1024:
+        raise UploadRejected(
+            "API-definition documents must be 25 MB or smaller."
+        )
+
+    try:
+        with source.open(
+            "r",
+            encoding="utf-8",
+            errors="strict",
+        ) as handle:
+            if file_type == "json":
+                document = json.load(handle)
+            else:
+                document = yaml.safe_load(handle)
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        yaml.YAMLError,
+    ) as exc:
+        raise UploadRejected(
+            "The API definition is not valid JSON or YAML."
+        ) from exc
+
+    if not isinstance(document, dict):
+        raise UploadRejected(
+            "The API definition must contain an object document."
+        )
+
+    detected = "API definition"
+
+    if (
+        "openapi" in document
+        or "swagger" in document
+    ):
+        detected = "OpenAPI/Swagger document"
+    elif "info" in document and "item" in document:
+        detected = "Postman collection"
+    elif "paths" in document:
+        detected = "API paths document"
+
+    extracted_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    destination = (
+        extracted_root
+        / safe_filename(source.name)
+    )
+
+    shutil.copy2(source, destination)
+
+    return (
+        1,
+        source.stat().st_size,
+        detected,
+    )
+
+
+def inspect_and_extract_zip(
+    source: Path,
+    destination_root: Path,
+) -> tuple[int, int, str]:
+    total_uncompressed = 0
+    entry_count = 0
+
+    try:
+        archive = zipfile.ZipFile(source)
+    except zipfile.BadZipFile as exc:
+        raise UploadRejected(
+            "The ZIP archive is invalid or corrupted."
+        ) from exc
+
+    with archive:
+        members = archive.infolist()
+
+        if len(members) > MAX_ARCHIVE_ENTRIES:
+            raise UploadRejected(
+                "Archive contains too many entries."
+            )
+
+        for member in members:
+            member_path = safe_relative_path(
+                member.filename
+            )
+
+            if member_path.name in IGNORED_ARCHIVE_NAMES:
+                continue
+
+            unix_mode = member.external_attr >> 16
+
+            if stat.S_ISLNK(unix_mode):
+                # Never follow or extract archive symlinks.
+                # Skipping preserves upload safety while allowing
+                # legitimate source archives containing links.
+                continue
+
+            if member.is_dir():
+                continue
+
+            entry_count += 1
+            total_uncompressed += member.file_size
+
+            if member.file_size > MAX_SINGLE_ENTRY_BYTES:
+                raise UploadRejected(
+                    "Archive contains an oversized file."
+                )
+
+            if total_uncompressed > MAX_EXTRACTED_BYTES:
+                raise UploadRejected(
+                    "Archive expands beyond the 500 MB limit."
+                )
+
+            if member.compress_size == 0:
+                if member.file_size > 1024 * 1024:
+                    raise UploadRejected(
+                        "Archive has a suspicious compression ratio."
+                    )
+            else:
+                ratio = (
+                    member.file_size
+                    / member.compress_size
+                )
+
+                if ratio > MAX_COMPRESSION_RATIO:
+                    raise UploadRejected(
+                        "Archive has a suspicious compression ratio."
+                    )
+
+            destination = (
+                destination_root / member_path
+            )
+
+            ensure_inside(
+                destination_root,
+                destination,
+            )
+
+            destination.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            with archive.open(member, "r") as source_file:
+                with destination.open("wb") as output:
+                    shutil.copyfileobj(
+                        source_file,
+                        output,
+                        length=1024 * 1024,
+                    )
+
+            os.chmod(destination, 0o600)
+
+    if entry_count == 0:
+        raise UploadRejected(
+            "Archive does not contain any files."
+        )
+
+    return (
+        entry_count,
+        total_uncompressed,
+        "ZIP project archive",
+    )
+
+
+def inspect_and_extract_tar(
+    source: Path,
+    destination_root: Path,
+) -> tuple[int, int, str]:
+    total_uncompressed = 0
+    entry_count = 0
+
+    try:
+        archive = tarfile.open(source, mode="r:*")
+    except tarfile.TarError as exc:
+        raise UploadRejected(
+            "The TAR archive is invalid or corrupted."
+        ) from exc
+
+    with archive:
+        members = archive.getmembers()
+
+        if len(members) > MAX_ARCHIVE_ENTRIES:
+            raise UploadRejected(
+                "Archive contains too many entries."
+            )
+
+        for member in members:
+            member_path = safe_relative_path(
+                member.name
+            )
+
+            if member_path.name in IGNORED_ARCHIVE_NAMES:
+                continue
+
+            if member.issym() or member.islnk():
+                # TAR symbolic and hard links are never followed
+                # or extracted into the private workspace.
+                continue
+
+            if member.isdev() or member.isfifo():
+                raise UploadRejected(
+                    "Archive device and FIFO entries are not allowed."
+                )
+
+            if member.isdir():
+                continue
+
+            if not member.isfile():
+                raise UploadRejected(
+                    "Archive contains an unsupported entry type."
+                )
+
+            entry_count += 1
+            total_uncompressed += member.size
+
+            if member.size > MAX_SINGLE_ENTRY_BYTES:
+                raise UploadRejected(
+                    "Archive contains an oversized file."
+                )
+
+            if total_uncompressed > MAX_EXTRACTED_BYTES:
+                raise UploadRejected(
+                    "Archive expands beyond the 500 MB limit."
+                )
+
+            destination = (
+                destination_root / member_path
+            )
+
+            ensure_inside(
+                destination_root,
+                destination,
+            )
+
+            destination.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            source_file = archive.extractfile(member)
+
+            if source_file is None:
+                raise UploadRejected(
+                    "Archive member could not be read."
+                )
+
+            with source_file:
+                with destination.open("wb") as output:
+                    shutil.copyfileobj(
+                        source_file,
+                        output,
+                        length=1024 * 1024,
+                    )
+
+            os.chmod(destination, 0o600)
+
+    if entry_count == 0:
+        raise UploadRejected(
+            "Archive does not contain any files."
+        )
+
+    return (
+        entry_count,
+        total_uncompressed,
+        "TAR project archive",
+    )
+
+
+def inspect_project_upload(
+    source: Path,
+    file_type: str,
+    extracted_root: Path,
+) -> tuple[int, int, str]:
+    extracted_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    os.chmod(extracted_root, 0o700)
+
+    if file_type == "zip":
+        return inspect_and_extract_zip(
+            source,
+            extracted_root,
+        )
+
+    if file_type in {"tar", "tar.gz", "tgz"}:
+        return inspect_and_extract_tar(
+            source,
+            extracted_root,
+        )
+
+    return validate_json_or_yaml(
+        source,
+        file_type,
+        extracted_root,
+    )
+
+
+def project_for_owner(
+    db: Session,
+    owner_user_id: int,
+    public_id: str,
+):
+    return (
+        db.execute(
+            text(
+                """
+                SELECT *
+                FROM projects
+                WHERE public_id = :public_id
+                  AND owner_user_id = :owner_user_id
+                  AND deleted_at IS NULL
+                LIMIT 1
+                """
+            ),
+            {
+                "public_id": public_id,
+                "owner_user_id": owner_user_id,
+            },
+        )
+        .mappings()
+        .first()
+    )
+
+
+def status_badge(status: str) -> str:
+    css_class = (
+        "ready"
+        if status == "ready"
+        else "failed"
+    )
+
+    return (
+        f'<span class="project-status {css_class}">'
+        f'{esc(status.title())}'
+        "</span>"
+    )
+
+
+@router.get("/projects")
+def project_list(
+    request: Request,
+    message: str = "",
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        projects = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                        public_id,
+                        name,
+                        environment,
+                        original_filename,
+                        file_type,
+                        file_size_bytes,
+                        archive_entry_count,
+                        status,
+                        created_at
+                    FROM projects
+                    WHERE owner_user_id = :owner_user_id
+                      AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    """
+                ),
+                {"owner_user_id": user.id},
+            )
+            .mappings()
+            .all()
+        )
+
+    if projects:
+        cards = "".join(
+            f"""
+            <article class="project-card">
+                <div class="project-card-top">
+                    <div class="project-file-icon">📦</div>
+                    {status_badge(project["status"])}
+                </div>
+
+                <h3>{esc(project["name"])}</h3>
+
+                <p>{esc(project["original_filename"])}</p>
+
+                <div class="project-meta">
+                    <span>
+                        {esc(project["file_type"].upper())}
+                    </span>
+                    <span>
+                        {esc(human_size(project["file_size_bytes"]))}
+                    </span>
+                    <span>
+                        {esc(project["environment"].title())}
+                    </span>
+                </div>
+
+                <a href="/projects/{esc(project["public_id"])}">
+                    Open private project →
+                </a>
+            </article>
+            """
+            for project in projects
+        )
+    else:
+        cards = """
+        <div class="project-empty">
+            <div>🦊</div>
+            <h2>No private projects yet</h2>
+            <p>
+                Upload your first project archive, OpenAPI document
+                or Postman collection.
+            </p>
+            <a class="primary-button" href="/projects/new">
+                Upload first project
+            </a>
+        </div>
+        """
+
+    notice = (
+        f'<div class="message">{esc(message)}</div>'
+        if message
+        else ""
+    )
+
+    content = f"""
+<section class="projects-shell">
+    <div class="projects-heading">
+        <div>
+            <span>PRIVATE PROJECT WORKSPACE</span>
+            <h1>Your projects</h1>
+            <p>
+                Only your authenticated account can access these
+                project records and files.
+            </p>
+        </div>
+
+        <a class="primary-button"
+           href="/projects/new">
+            + New private project
+        </a>
+    </div>
+
+    {notice}
+
+    <div class="project-grid">
+        {cards}
+    </div>
+</section>
+"""
+
+    return layout(
+        "Private projects",
+        content,
+        request,
+        public=False,
+    )
+
+
+@router.get("/projects/new")
+def new_project_page(
+    request: Request,
+    message: str = "",
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    csrf = csrf_token(request)
+
+    notice = (
+        f'<div class="message error">{esc(message)}</div>'
+        if message
+        else ""
+    )
+
+    content = f"""
+<section class="upload-shell">
+    <div class="upload-info">
+        <span class="pill">PRIVATE UPLOAD</span>
+        <div class="upload-fox">🦊</div>
+        <h1>Bring your project to Qubi.</h1>
+        <p>
+            QAFox validates the file, checks archive safety and
+            stores it inside your private account workspace.
+        </p>
+
+        <div class="upload-security-list">
+            <span>✓ 100 MB upload limit</span>
+            <span>✓ Path traversal blocked</span>
+            <span>✓ Archive bombs blocked</span>
+            <span>✓ Symlinks safely skipped</span>
+            <span>✓ Device and FIFO entries blocked</span>
+            <span>✓ Uploaded code is not executed</span>
+            <span>✓ Strict account ownership checks</span>
+        </div>
+    </div>
+
+    <form class="upload-form"
+          method="post"
+          action="/projects/new"
+          enctype="multipart/form-data">
+
+        <span class="auth-kicker">
+            PHASE 1 · API TESTING
+        </span>
+        <h2>Create private project</h2>
+        <p>
+            Upload an archive, OpenAPI file or Postman collection.
+        </p>
+
+        {notice}
+
+        <input type="hidden"
+               name="csrf"
+               value="{esc(csrf)}">
+
+        <label>
+            Project name
+            <input name="project_name"
+                   required
+                   minlength="2"
+                   maxlength="160"
+                   placeholder="Example: Customer API">
+        </label>
+
+        <label>
+            Description <small>Optional</small>
+            <textarea name="description"
+                      maxlength="1500"
+                      rows="3"
+                      placeholder="What does this project contain?"></textarea>
+        </label>
+
+        <label>
+            Target environment
+            <select name="environment">
+                <option value="development">
+                    Development
+                </option>
+                <option value="testing" selected>
+                    Testing
+                </option>
+                <option value="staging">
+                    Staging
+                </option>
+                <option value="production">
+                    Production
+                </option>
+            </select>
+        </label>
+
+        <label class="file-drop">
+            <input type="file"
+                   name="project_file"
+                   required
+                   accept=".zip,.tar,.gz,.tgz,.json,.yaml,.yml">
+
+            <span class="file-drop-icon">⇧</span>
+            <strong>Choose project file</strong>
+            <small>
+                ZIP, TAR, TAR.GZ, TGZ, JSON, YAML or YML
+            </small>
+            <small>Maximum 100 MB</small>
+        </label>
+
+        <label class="checkbox upload-consent">
+            <input type="checkbox"
+                   name="upload_confirmation"
+                   value="yes"
+                   required>
+            <span>
+                I am authorized to upload and test this project.
+            </span>
+        </label>
+
+        <button class="primary-button full"
+                type="submit">
+            Upload to private workspace
+        </button>
+
+        <a class="cancel-link"
+           href="/projects">
+            Cancel
+        </a>
+    </form>
+</section>
+"""
+
+    return layout(
+        "New private project",
+        content,
+        request,
+        public=False,
+    )
+
+
+@router.post("/projects/new")
+async def create_project(
+    request: Request,
+    project_name: str = Form(...),
+    description: str = Form(""),
+    environment: str = Form("testing"),
+    upload_confirmation: str = Form(""),
+    csrf: str = Form(...),
+    project_file: UploadFile = File(...),
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            "/projects/new?"
+            "message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    project_name = project_name.strip()
+    description = description.strip()
+    environment = environment.strip().lower()
+
+    if len(project_name) < 2:
+        return RedirectResponse(
+            "/projects/new?"
+            "message=Enter+a+valid+project+name.",
+            status_code=303,
+        )
+
+    if environment not in ALLOWED_ENVIRONMENTS:
+        return RedirectResponse(
+            "/projects/new?"
+            "message=Choose+a+valid+environment.",
+            status_code=303,
+        )
+
+    if upload_confirmation != "yes":
+        return RedirectResponse(
+            "/projects/new?"
+            "message=Confirm+that+you+are+authorized+to+upload+the+project.",
+            status_code=303,
+        )
+
+    original_filename = safe_filename(
+        project_file.filename
+    )
+    public_id = str(uuid.uuid4())
+    staging_directory = (
+        STAGING_ROOT
+        / str(user.id)
+        / public_id
+    )
+    project_directory = (
+        PROJECT_ROOT
+        / str(user.id)
+        / public_id
+    )
+
+    staging_file = (
+        staging_directory
+        / original_filename
+    )
+
+    try:
+        file_type = detect_file_type(
+            original_filename
+        )
+
+        staging_directory.mkdir(
+            parents=True,
+            exist_ok=False,
+        )
+        os.chmod(staging_directory, 0o700)
+
+        file_size, sha256 = await save_upload(
+            project_file,
+            staging_file,
+        )
+
+        original_directory = (
+            project_directory / "original"
+        )
+        extracted_directory = (
+            project_directory / "source"
+        )
+
+        original_directory.mkdir(
+            parents=True,
+            exist_ok=False,
+        )
+        os.chmod(project_directory, 0o700)
+        os.chmod(original_directory, 0o700)
+
+        stored_file = (
+            original_directory
+            / original_filename
+        )
+
+        shutil.move(
+            str(staging_file),
+            str(stored_file),
+        )
+        os.chmod(stored_file, 0o600)
+
+        (
+            entry_count,
+            extracted_size,
+            detected_description,
+        ) = inspect_project_upload(
+            stored_file,
+            file_type,
+            extracted_directory,
+        )
+
+        shutil.rmtree(
+            staging_directory,
+            ignore_errors=True,
+        )
+
+        now = utc_now()
+
+        with Session(engine) as db:
+            result = db.execute(
+                text(
+                    """
+                    INSERT INTO projects (
+                        public_id,
+                        owner_user_id,
+                        name,
+                        description,
+                        environment,
+                        original_filename,
+                        stored_filename,
+                        storage_directory,
+                        file_type,
+                        content_type,
+                        file_size_bytes,
+                        sha256,
+                        archive_entry_count,
+                        extracted_size_bytes,
+                        status,
+                        status_message,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :public_id,
+                        :owner_user_id,
+                        :name,
+                        :description,
+                        :environment,
+                        :original_filename,
+                        :stored_filename,
+                        :storage_directory,
+                        :file_type,
+                        :content_type,
+                        :file_size_bytes,
+                        :sha256,
+                        :archive_entry_count,
+                        :extracted_size_bytes,
+                        'ready',
+                        :status_message,
+                        :created_at,
+                        :updated_at
+                    )
+                    RETURNING id
+                    """
+                ),
+                {
+                    "public_id": public_id,
+                    "owner_user_id": user.id,
+                    "name": project_name,
+                    "description": description or None,
+                    "environment": environment,
+                    "original_filename": original_filename,
+                    "stored_filename": original_filename,
+                    "storage_directory": str(
+                        project_directory
+                    ),
+                    "file_type": file_type,
+                    "content_type": (
+                        project_file.content_type
+                        or "application/octet-stream"
+                    )[:150],
+                    "file_size_bytes": file_size,
+                    "sha256": sha256,
+                    "archive_entry_count": entry_count,
+                    "extracted_size_bytes": extracted_size,
+                    "status_message": (
+                        f"{detected_description} validated. "
+                        "Uploaded code has not been executed."
+                    ),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+            project_id = result.scalar_one()
+
+            db.execute(
+                text(
+                    """
+                    INSERT INTO project_audit_events (
+                        project_id,
+                        owner_user_id,
+                        event_type,
+                        event_summary,
+                        created_at
+                    )
+                    VALUES (
+                        :project_id,
+                        :owner_user_id,
+                        'project-uploaded',
+                        :event_summary,
+                        :created_at
+                    )
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "owner_user_id": user.id,
+                    "event_summary": (
+                        "Project uploaded and passed "
+                        "archive safety validation."
+                    ),
+                    "created_at": now,
+                },
+            )
+
+            db.commit()
+
+    except UploadRejected as exc:
+        shutil.rmtree(
+            staging_directory,
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            project_directory,
+            ignore_errors=True,
+        )
+
+        return RedirectResponse(
+            "/projects/new?message="
+            + str(exc).replace(" ", "+"),
+            status_code=303,
+        )
+
+    except Exception:
+        shutil.rmtree(
+            staging_directory,
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            project_directory,
+            ignore_errors=True,
+        )
+
+        return RedirectResponse(
+            "/projects/new?"
+            "message=Upload+could+not+be+completed.+"
+            "The+temporary+files+were+removed.",
+            status_code=303,
+        )
+
+    finally:
+        await project_file.close()
+
+    return RedirectResponse(
+        f"/projects/{public_id}",
+        status_code=303,
+    )
+
+
+@router.get("/projects/{public_id}")
+def project_detail(
+    request: Request,
+    public_id: str,
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+    except ValueError:
+        return RedirectResponse(
+            "/projects",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = project_for_owner(
+            db,
+            user.id,
+            public_id,
+        )
+
+        if not project:
+            return RedirectResponse(
+                "/projects?"
+                "message=Project+was+not+found+in+your+workspace.",
+                status_code=303,
+            )
+
+        events = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                        event_type,
+                        event_summary,
+                        created_at
+                    FROM project_audit_events
+                    WHERE project_id = :project_id
+                      AND owner_user_id = :owner_user_id
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """
+                ),
+                {
+                    "project_id": project["id"],
+                    "owner_user_id": user.id,
+                },
+            )
+            .mappings()
+            .all()
+        )
+
+    event_items = "".join(
+        f"""
+        <li>
+            <i>✓</i>
+            <div>
+                <strong>{esc(event["event_summary"])}</strong>
+                <small>{esc(str(event["created_at"]))}</small>
+            </div>
+        </li>
+        """
+        for event in events
+    )
+
+    sha_id = f"project-sha-{public_id}"
+    discovery_csrf = csrf_token(request)
+
+    content = f"""
+<section class="project-detail-shell">
+    <div class="project-detail-heading">
+        <div>
+            <a href="/projects">← Private projects</a>
+            <h1>{esc(project["name"])}</h1>
+            <p>{esc(project["description"] or "No description")}</p>
+        </div>
+
+        {status_badge(project["status"])}
+    </div>
+
+    <div class="project-privacy-banner">
+        <span>🛡</span>
+        <div>
+            <strong>Private ownership enforced</strong>
+            <p>
+                This project is accessible only through your
+                authenticated QAFox account.
+            </p>
+        </div>
+    </div>
+
+    <div class="project-detail-grid">
+        <article class="project-detail-card">
+            <span>UPLOAD</span>
+            <h2>Project file</h2>
+
+            <dl>
+                <div>
+                    <dt>Original file</dt>
+                    <dd>{esc(project["original_filename"])}</dd>
+                </div>
+                <div>
+                    <dt>File type</dt>
+                    <dd>{esc(project["file_type"].upper())}</dd>
+                </div>
+                <div>
+                    <dt>Upload size</dt>
+                    <dd>{esc(human_size(project["file_size_bytes"]))}</dd>
+                </div>
+                <div>
+                    <dt>Extracted size</dt>
+                    <dd>{esc(human_size(project["extracted_size_bytes"]))}</dd>
+                </div>
+                <div>
+                    <dt>Archive entries</dt>
+                    <dd>{esc(str(project["archive_entry_count"]))}</dd>
+                </div>
+                <div>
+                    <dt>Environment</dt>
+                    <dd>{esc(project["environment"].title())}</dd>
+                </div>
+            </dl>
+
+            <a class="outline-dark-button"
+               href="/projects/{esc(public_id)}/download">
+                Download original file
+            </a>
+        </article>
+
+        <article class="project-detail-card">
+            <span>INTEGRITY</span>
+            <h2>Upload verification</h2>
+
+            <p>{esc(project["status_message"])}</p>
+
+            <label>SHA-256 fingerprint</label>
+
+            <div class="copy-value-row project-hash">
+                <code id="{esc(sha_id)}">
+                    {esc(project["sha256"])}
+                </code>
+
+                <button type="button"
+                        class="copy-button"
+                        data-copy-target="#{esc(sha_id)}">
+                    ⧉ Copy
+                </button>
+            </div>
+
+            <div class="execution-warning">
+                Uploaded source has not been executed.
+                API discovery uses static source analysis only.
+            </div>
+
+            <div class="discovery-actions">
+                <form method="post"
+                      action="/projects/{esc(public_id)}/api-discovery">
+
+                    <input type="hidden"
+                           name="csrf"
+                           value="{esc(discovery_csrf)}">
+
+                    <button class="primary-button"
+                            type="submit">
+                        Discover APIs
+                    </button>
+                </form>
+
+                <a class="outline-dark-button"
+                   href="/projects/{esc(public_id)}/api-inventory">
+                    View latest inventory
+                </a>
+
+                <a class="outline-dark-button"
+                   href="/projects/{esc(public_id)}/test-config">
+                    Configure API testing
+                </a>
+            </div>
+        </article>
+    </div>
+
+    <article class="project-audit-card">
+        <span>AUDIT HISTORY</span>
+        <h2>Private project activity</h2>
+        <ul>{event_items}</ul>
+    </article>
+</section>
+"""
+
+    return layout(
+        project["name"],
+        content,
+        request,
+        public=False,
+    )
+
+
+@router.get("/projects/{public_id}/download")
+def download_original_project(
+    request: Request,
+    public_id: str,
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+    except ValueError:
+        return RedirectResponse(
+            "/projects",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = project_for_owner(
+            db,
+            user.id,
+            public_id,
+        )
+
+        if not project:
+            return RedirectResponse(
+                "/projects?"
+                "message=Project+was+not+found+in+your+workspace.",
+                status_code=303,
+            )
+
+        project_directory = Path(
+            project["storage_directory"]
+        )
+
+        expected_owner_root = (
+            PROJECT_ROOT
+            / str(user.id)
+        ).resolve()
+
+        original_file = (
+            project_directory
+            / "original"
+            / project["stored_filename"]
+        ).resolve()
+
+        try:
+            original_file.relative_to(
+                expected_owner_root
+            )
+        except ValueError:
+            return RedirectResponse(
+                "/projects",
+                status_code=303,
+            )
+
+        if not original_file.is_file():
+            return RedirectResponse(
+                f"/projects/{public_id}",
+                status_code=303,
+            )
+
+        db.execute(
+            text(
+                """
+                INSERT INTO project_audit_events (
+                    project_id,
+                    owner_user_id,
+                    event_type,
+                    event_summary,
+                    created_at
+                )
+                VALUES (
+                    :project_id,
+                    :owner_user_id,
+                    'original-downloaded',
+                    'Original project file downloaded.',
+                    :created_at
+                )
+                """
+            ),
+            {
+                "project_id": project["id"],
+                "owner_user_id": user.id,
+                "created_at": utc_now(),
+            },
+        )
+        db.commit()
+
+    return FileResponse(
+        path=str(original_file),
+        filename=project["original_filename"],
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": (
+                "private, no-store, max-age=0"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  >
+  <meta name="theme-color" content="#281463">
+  <title>QAFox · Offline</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family:
+        Inter, system-ui, -apple-system, sans-serif;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: #14213d;
+      background:
+        radial-gradient(
+          circle at top right,
+          #e7ddff,
+          transparent 35%
+        ),
+        #f7f8fc;
+    }
+
+    main {
+      width: min(480px, 100%);
+      padding: 42px;
+      text-align: center;
+      background: white;
+      border: 1px solid #e7eaf1;
+      border-radius: 25px;
+      box-shadow: 0 22px 55px
+        rgba(33, 41, 69, .1);
+    }
+
+    .fox {
+      font-size: 82px;
+    }
+
+    h1 {
+      margin: 12px 0;
+      font-size: 31px;
+    }
+
+    p {
+      color: #747f92;
+      line-height: 1.7;
+    }
+
+    button {
+      min-height: 43px;
+      margin-top: 12px;
+      padding: 0 18px;
+      color: white;
+      background:
+        linear-gradient(135deg, #ff6b2c, #ff3d5a);
+      border: 0;
+      border-radius: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="fox">🦊</div>
+    <h1>Qubi lost the connection.</h1>
+    <p>
+      QAFox cannot reach the server right now.
+      Check your internet connection and try again.
+    </p>
+    <button onclick="location.reload()">
+      Try again
+    </button>
+  </main>
+</body>
+</html>

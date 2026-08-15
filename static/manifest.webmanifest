@@ -1,0 +1,38 @@
+{
+  "id": "/",
+  "name": "QAFox — Quality Engineering Platform",
+  "short_name": "QAFox",
+  "description": "Privacy-first quality engineering workspace for API, manual, automation, security and performance testing.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f8fc",
+  "theme_color": "#281463",
+  "categories": [
+    "developer",
+    "business",
+    "productivity",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/static/icons/qafox-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/qafox-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/qafox-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

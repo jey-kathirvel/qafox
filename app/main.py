@@ -1,0 +1,1383 @@
+import base64
+import html
+import os
+import secrets
+import smtplib
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from urllib.parse import quote
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from pwdlib import PasswordHash
+from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, or_
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from starlette.middleware.sessions import SessionMiddleware
+
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+SECRET_KEY = os.environ["QAFOX_SECRET_KEY"]
+DOMAIN = os.getenv("QAFOX_DOMAIN", "qafox.ads-ai.in")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME)
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "QAFox")
+SMTP_PASSWORD = base64.b64decode(
+    os.environ["SMTP_PASSWORD_B64"]
+).decode("utf-8")
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+
+password_hash = PasswordHash.recommended()
+serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(150))
+    username: Mapped[str] = mapped_column(
+        String(50), unique=True, index=True
+    )
+    email: Mapped[str] = mapped_column(
+        String(320), unique=True, index=True
+    )
+    mobile: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    password_digest: Mapped[str] = mapped_column(String(500))
+    passcode_digest: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    credential_type: Mapped[str] = mapped_column(
+        String(20),
+        default="password",
+    )
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    auth_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+    )
+    last_recovery_email_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    mfa_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+    mfa_secret_encrypted: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+    mfa_pending_secret_encrypted: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+    mfa_recovery_codes: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    mfa_last_counter: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+
+Base.metadata.create_all(engine)
+
+app = FastAPI(
+    title="QAFox",
+    docs_url=None,
+    redoc_url=None,
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    session_cookie="qafox_session",
+    max_age=60 * 60 * 8,
+    same_site="lax",
+    https_only=True,
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory="/opt/qafox/static"),
+    name="static",
+)
+
+
+def esc(value: str | None) -> str:
+    return html.escape(value or "", quote=True)
+
+
+def csrf_token(request: Request) -> str:
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = token
+    return token
+
+
+def csrf_valid(request: Request, submitted: str) -> bool:
+    expected = request.session.get("csrf_token", "")
+    return bool(expected) and secrets.compare_digest(
+        expected, submitted
+    )
+
+
+def current_user(request: Request) -> User | None:
+    user_id = request.session.get("user_id")
+    session_auth_version = request.session.get(
+        "auth_version"
+    )
+
+    if not user_id or session_auth_version is None:
+        return None
+
+    with Session(engine) as db:
+        user = db.get(User, int(user_id))
+
+        if (
+            not user
+            or not user.is_active
+            or user.auth_version != session_auth_version
+        ):
+            return None
+
+        return user
+
+
+def send_email(
+    recipient: str,
+    subject: str,
+    text_body: str,
+) -> None:
+    message = EmailMessage()
+    message["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(text_body)
+
+    with smtplib.SMTP_SSL(
+        SMTP_HOST,
+        SMTP_PORT,
+        timeout=20,
+    ) as smtp:
+        smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        smtp.send_message(message)
+
+
+def send_verification(user: User) -> None:
+    token = serializer.dumps(
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "purpose": "verify-email",
+        },
+        salt="qafox-email-verification",
+    )
+    url = f"https://{DOMAIN}/verify-email?token={quote(token)}"
+
+    send_email(
+        user.email,
+        "Verify your QAFox email address",
+        f"""Hello {user.full_name},
+
+Welcome to QAFox.
+
+Verify your email address using this secure link:
+
+{url}
+
+This link expires in 24 hours.
+
+If you did not create this account, ignore this email.
+
+QAFox
+Hunt Issues. Ship Quality.
+""",
+    )
+
+
+def layout(
+    title: str,
+    content: str,
+    request: Request,
+    public: bool = True,
+) -> HTMLResponse:
+    user = current_user(request)
+    account = ""
+
+    if user:
+        account = f"""
+        <div class="user-menu">
+            <span>{esc(user.full_name[:1].upper())}</span>
+            <div>
+                <strong>{esc(user.full_name)}</strong>
+                <small>@{esc(user.username)}</small>
+            </div>
+            <a href="/projects">Projects</a>
+            <a href="/security/mfa">Security</a>
+            <a href="/logout">Logout</a>
+        </div>
+        """
+
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+<title>{esc(title)} · QAFox</title>
+<meta name="description"
+      content="Private quality engineering workspace">
+<meta name="theme-color" content="#281463">
+<meta name="application-name" content="QAFox">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style"
+      content="default">
+<meta name="apple-mobile-web-app-title" content="QAFox">
+<link rel="manifest"
+      href="/static/manifest.webmanifest">
+<link rel="icon"
+      type="image/png"
+      sizes="192x192"
+      href="/static/icons/qafox-192.png">
+<link rel="apple-touch-icon"
+      href="/static/icons/qafox-192.png">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+    <a class="brand" href="/">
+        <span class="fox-logo">🦊</span>
+        <strong>QA<span>Fox</span></strong>
+    </a>
+    {account}
+</header>
+<main class="{'public-main' if public else 'dashboard-main'}">
+{content}
+</main>
+<footer>
+    <span>
+        © 2026 QAFox ·
+        <a href="https://ads-ai.in"
+           target="_blank"
+           rel="noopener noreferrer">
+            Developed by ads-ai.in
+            <small>(AI-powered company)</small>
+        </a>
+    </span>
+    <span>
+        PWA supported ·
+        Your private quality engineering workspace.
+    </span>
+</footer>
+</body>
+</html>"""
+    )
+
+
+def auth_message(message: str, kind: str = "info") -> str:
+    if not message:
+        return ""
+    return f'<div class="message {kind}">{esc(message)}</div>'
+
+
+@app.get("/health")
+def health():
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+        return {
+            "status": "healthy",
+            "service": "qafox",
+            "database": "connected",
+        }
+    except Exception:
+        return JSONResponse(
+            {
+                "status": "unhealthy",
+                "service": "qafox",
+                "database": "unavailable",
+            },
+            status_code=503,
+        )
+
+
+@app.get("/")
+def home(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
+
+    content = """
+<section class="hero">
+    <div>
+        <span class="pill">PRIVACY-FIRST QUALITY ENGINEERING</span>
+        <h1>Hunt issues.<br><em>Ship quality.</em></h1>
+        <p>
+            Discover and test APIs today. Expand into manual,
+            automation, security, performance and accessibility
+            testing tomorrow.
+        </p>
+        <div class="hero-actions">
+            <a class="primary-button" href="/signup">
+                Create private workspace
+            </a>
+            <a class="outline-button" href="/login">
+                Sign in
+            </a>
+        </div>
+        <div class="trust-row">
+            <span>✓ Private projects</span>
+            <span>✓ Encrypted transport</span>
+            <span>✓ Isolated workspaces</span>
+        </div>
+    </div>
+    <div class="qubi-card">
+        <div class="bubble">Ready to hunt some bugs?</div>
+        <div class="qubi">🦊</div>
+        <strong>Meet Qubi</strong>
+        <small>Your friendly quality guide</small>
+    </div>
+</section>
+
+<section class="toolkit">
+    <div class="section-heading">
+        <span>QUALITY ENGINEERING PLATFORM</span>
+        <h2>One workspace. Every testing discipline.</h2>
+    </div>
+    <div class="cards">
+        <article class="active-card">
+            <i>↗</i><b>Available first</b>
+            <h3>API Testing</h3>
+            <p>API discovery, audit, execution and detailed reports.</p>
+        </article>
+        <article>
+            <i>✓</i><b>Coming next</b>
+            <h3>Manual Testing</h3>
+            <p>Test cases, plans, execution, evidence and traceability.</p>
+        </article>
+        <article>
+            <i>⚙</i><b>Roadmap</b>
+            <h3>Automation Testing</h3>
+            <p>Web and mobile automation with reusable test suites.</p>
+        </article>
+        <article>
+            <i>♢</i><b>Roadmap</b>
+            <h3>Security Testing</h3>
+            <p>OWASP checks, secrets detection and dependency insights.</p>
+        </article>
+        <article>
+            <i>ϟ</i><b>Roadmap</b>
+            <h3>Performance Testing</h3>
+            <p>Load, stress, spike and response-time analysis.</p>
+        </article>
+        <article>
+            <i>◉</i><b>Roadmap</b>
+            <h3>Accessibility</h3>
+            <p>Inclusive experience checks and actionable guidance.</p>
+        </article>
+    </div>
+</section>
+"""
+    return layout("Quality Engineering Platform", content, request)
+
+
+
+@app.get("/privacy")
+def privacy_policy(request: Request):
+    content = """
+<section class="policy-shell">
+    <div class="policy-heading">
+        <span class="pill dark">SIMPLIFIED PRIVACY NOTICE</span>
+        <h1>Your project belongs to you.</h1>
+        <p>
+            This notice explains in simple language what QAFox
+            collects, why it is needed and the choices available
+            to you.
+        </p>
+        <small>Last updated: 15 August 2026</small>
+    </div>
+
+    <div class="policy-card privacy-summary">
+        <h2>🛡 Privacy in one minute</h2>
+        <ul>
+            <li>Your projects are private by default.</li>
+            <li>
+                Other QAFox users cannot view your projects,
+                credentials or reports.
+            </li>
+            <li>
+                Your project data is not used for advertising
+                or AI-model training.
+            </li>
+            <li>
+                Passwords and passcodes are stored only as
+                one-way security hashes.
+            </li>
+            <li>
+                You may request access, correction, export or
+                deletion of your personal data.
+            </li>
+        </ul>
+    </div>
+
+    <div class="policy-grid">
+        <article class="policy-card">
+            <h2>1. Information we collect</h2>
+            <p>QAFox may collect:</p>
+            <ul>
+                <li>Name, username and email address</li>
+                <li>Optional mobile number</li>
+                <li>Account and security activity</li>
+                <li>Project files you choose to upload</li>
+                <li>API definitions and testing configuration</li>
+                <li>Test results, reports and audit history</li>
+                <li>
+                    Essential technical logs needed for security
+                    and service reliability
+                </li>
+            </ul>
+        </article>
+
+        <article class="policy-card">
+            <h2>2. Why we use it</h2>
+            <p>Information is processed only to:</p>
+            <ul>
+                <li>Create and protect your private account</li>
+                <li>Verify your email and recover access</li>
+                <li>Discover and test APIs you submit</li>
+                <li>Create and retain your requested reports</li>
+                <li>Prevent misuse and investigate failures</li>
+                <li>Maintain platform security and reliability</li>
+            </ul>
+        </article>
+
+        <article class="policy-card">
+            <h2>3. Project privacy</h2>
+            <p>
+                Projects are associated with the authenticated
+                account that created them. QAFox is designed to
+                prevent one user from accessing another user's
+                projects.
+            </p>
+            <p>
+                Authorized operational access, where technically
+                necessary, must be limited to maintaining,
+                securing or troubleshooting the service.
+            </p>
+        </article>
+
+        <article class="policy-card">
+            <h2>4. Sharing</h2>
+            <p>
+                QAFox does not sell personal information.
+                Information may be disclosed only:
+            </p>
+            <ul>
+                <li>When you explicitly request sharing</li>
+                <li>
+                    To essential infrastructure providers acting
+                    on service instructions
+                </li>
+                <li>When required by applicable law</li>
+                <li>
+                    To protect users, the platform or legal rights
+                </li>
+            </ul>
+        </article>
+
+        <article class="policy-card">
+            <h2>5. Retention and deletion</h2>
+            <p>
+                Account and project data is retained while needed
+                to provide QAFox services or meet legal and
+                security obligations.
+            </p>
+            <p>
+                Future project settings will allow users to choose
+                retention periods and permanently delete uploaded
+                projects and generated reports.
+            </p>
+        </article>
+
+        <article class="policy-card">
+            <h2>6. Your choices and rights</h2>
+            <p>You may request:</p>
+            <ul>
+                <li>Access to your personal information</li>
+                <li>Correction or completion</li>
+                <li>Account and project-data deletion</li>
+                <li>Withdrawal of optional consent</li>
+                <li>Information about data processing</li>
+                <li>Assistance with a privacy grievance</li>
+            </ul>
+        </article>
+
+        <article class="policy-card">
+            <h2>7. Cookies and PWA storage</h2>
+            <p>
+                QAFox uses essential secure session cookies for
+                authentication and CSRF protection. The PWA may
+                cache public interface assets for faster loading
+                and offline presentation.
+            </p>
+            <p>
+                Private dashboards, project data and credentials
+                are not intentionally stored in the public PWA
+                application cache.
+            </p>
+        </article>
+
+        <article class="policy-card">
+            <h2>8. Security</h2>
+            <p>
+                QAFox uses HTTPS, secure cookies, one-way
+                credential hashing, account separation and
+                restricted service access.
+            </p>
+            <p>
+                No internet service can promise absolute security.
+                Report suspected account misuse immediately.
+            </p>
+        </article>
+    </div>
+
+    <div class="policy-card policy-contact">
+        <div>
+            <h2>Privacy question or request?</h2>
+            <p>
+                Contact the ADS AI team from your registered email
+                address.
+            </p>
+        </div>
+        <a class="primary-button"
+           href="mailto:tech@ads-ai.in?subject=QAFox%20Privacy%20Request">
+            Contact tech@ads-ai.in
+        </a>
+    </div>
+
+    <div class="policy-actions">
+        <a class="outline-dark-button" href="/">
+            Return to QAFox
+        </a>
+        <a class="primary-button" href="/signup">
+            Create private workspace
+        </a>
+    </div>
+</section>
+"""
+    return layout("Privacy Policy", content, request)
+
+
+
+
+@app.get("/signup")
+def signup_page(request: Request, message: str = ""):
+    token = csrf_token(request)
+
+    content = f"""
+<section class="auth-shell">
+    <div class="auth-art">
+        <span class="pill">PRIVATE BY DEFAULT</span>
+        <h1>Create your private<br>QAFox workspace.</h1>
+        <p>
+            Project files, credentials and reports remain isolated
+            within your account.
+        </p>
+
+        <div class="privacy-box">
+            <strong>🛡 Your code is not our content.</strong>
+            <small>
+                QAFox does not use uploaded project data for
+                advertising or AI-model training.
+            </small>
+            <a href="/privacy" target="_blank"
+               rel="noopener noreferrer">
+                Read the simplified Privacy Policy →
+            </a>
+        </div>
+    </div>
+
+    <form class="auth-card" method="post" action="/signup">
+        <span class="auth-kicker">GET STARTED</span>
+        <h2>Create account</h2>
+        <p>
+            Choose either a strong password or a 6-digit passcode.
+        </p>
+
+        {auth_message(message, "error")}
+
+        <input type="hidden" name="csrf"
+               value="{esc(token)}">
+
+        <label>
+            Full name
+            <input name="full_name" required maxlength="150"
+                   autocomplete="name">
+        </label>
+
+        <label>
+            Username
+            <input name="username" required minlength="4"
+                   maxlength="50" autocomplete="username"
+                   pattern="[A-Za-z0-9_.-]+">
+        </label>
+
+        <label>
+            Email address
+            <input type="email" name="email" required
+                   maxlength="320" autocomplete="email">
+        </label>
+
+        <label>
+            Mobile number <small>Optional</small>
+            <input name="mobile" maxlength="30"
+                   autocomplete="tel">
+        </label>
+
+        <fieldset class="credential-choice">
+            <legend>Choose how you want to sign in</legend>
+
+            <label class="credential-option">
+                <input type="radio"
+                       name="credential_type"
+                       value="password"
+                       checked>
+                <span>
+                    <strong>Password</strong>
+                    <small>Minimum 12 characters</small>
+                </span>
+            </label>
+
+            <label class="credential-option">
+                <input type="radio"
+                       name="credential_type"
+                       value="passcode">
+                <span>
+                    <strong>6-digit passcode</strong>
+                    <small>
+                        Easy sign-in with automatic lock protection
+                    </small>
+                </span>
+            </label>
+        </fieldset>
+
+        <div class="credential-fields password-fields">
+            <label>
+                Password
+                <input type="password" name="password"
+                       minlength="12" maxlength="128"
+                       autocomplete="new-password">
+            </label>
+
+            <label>
+                Confirm password
+                <input type="password" name="confirm_password"
+                       minlength="12" maxlength="128"
+                       autocomplete="new-password">
+            </label>
+        </div>
+
+        <div class="credential-fields passcode-fields">
+            <label>
+                6-digit passcode
+                <input type="password" name="passcode"
+                       inputmode="numeric"
+                       pattern="[0-9]{{6}}"
+                       minlength="6" maxlength="6"
+                       autocomplete="new-password">
+            </label>
+
+            <label>
+                Confirm passcode
+                <input type="password" name="confirm_passcode"
+                       inputmode="numeric"
+                       pattern="[0-9]{{6}}"
+                       minlength="6" maxlength="6"
+                       autocomplete="new-password">
+            </label>
+
+            <div class="passcode-warning">
+                🔐 Five failed attempts temporarily lock the
+                account for 15 minutes.
+            </div>
+        </div>
+
+        <label class="checkbox consent-checkbox">
+            <input type="checkbox" name="accept_terms"
+                   value="yes" required>
+            <span>
+                I have read and accept the
+                <a href="/privacy" target="_blank"
+                   rel="noopener noreferrer">
+                    simplified Privacy Policy
+                </a>
+                and Terms.
+            </span>
+        </label>
+
+        <button class="primary-button full" type="submit">
+            Create secure workspace
+        </button>
+
+        <div class="auth-links">
+            Already registered?
+            <a href="/login">Sign in</a>
+        </div>
+    </form>
+</section>
+"""
+
+    return layout("Create account", content, request)
+
+
+
+@app.post("/signup")
+def signup(
+    request: Request,
+    full_name: str = Form(...),
+    username: str = Form(...),
+    email: str = Form(...),
+    mobile: str = Form(""),
+    credential_type: str = Form("password"),
+    password: str = Form(""),
+    confirm_password: str = Form(""),
+    passcode: str = Form(""),
+    confirm_passcode: str = Form(""),
+    accept_terms: str = Form(""),
+    csrf: str = Form(...),
+):
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            "/signup?message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    full_name = full_name.strip()
+    username = username.strip().lower()
+    email = email.strip().lower()
+    mobile = mobile.strip() or None
+    credential_type = credential_type.strip().lower()
+
+    if len(full_name) < 2:
+        return RedirectResponse(
+            "/signup?message=Enter+your+full+name.",
+            status_code=303,
+        )
+
+    if (
+        len(username) < 4
+        or not all(
+            character.isalnum() or character in "_.-"
+            for character in username
+        )
+    ):
+        return RedirectResponse(
+            "/signup?message=Choose+a+valid+username.",
+            status_code=303,
+        )
+
+    if credential_type not in {"password", "passcode"}:
+        return RedirectResponse(
+            "/signup?message=Choose+password+or+passcode.",
+            status_code=303,
+        )
+
+    password_digest = password_hash.hash(
+        secrets.token_urlsafe(48)
+    )
+    passcode_digest = None
+
+    if credential_type == "password":
+        if len(password) < 12:
+            return RedirectResponse(
+                "/signup?message=Password+must+have+at+least+12+characters.",
+                status_code=303,
+            )
+
+        if password != confirm_password:
+            return RedirectResponse(
+                "/signup?message=Passwords+do+not+match.",
+                status_code=303,
+            )
+
+        password_digest = password_hash.hash(password)
+
+    if credential_type == "passcode":
+        if (
+            len(passcode) != 6
+            or not passcode.isdigit()
+        ):
+            return RedirectResponse(
+                "/signup?message=Passcode+must+contain+exactly+6+digits.",
+                status_code=303,
+            )
+
+        if passcode != confirm_passcode:
+            return RedirectResponse(
+                "/signup?message=Passcodes+do+not+match.",
+                status_code=303,
+            )
+
+        weak_passcodes = {
+            "000000",
+            "111111",
+            "123456",
+            "121212",
+            "654321",
+            "222222",
+            "333333",
+            "444444",
+            "555555",
+            "666666",
+            "777777",
+            "888888",
+            "999999",
+        }
+
+        if passcode in weak_passcodes:
+            return RedirectResponse(
+                "/signup?message=Choose+a+less+predictable+passcode.",
+                status_code=303,
+            )
+
+        passcode_digest = password_hash.hash(passcode)
+
+    if accept_terms != "yes":
+        return RedirectResponse(
+            "/signup?message=Accept+the+Privacy+Policy+and+Terms.",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        existing = db.query(User).filter(
+            or_(
+                User.username == username,
+                User.email == email,
+            )
+        ).first()
+
+        if existing:
+            return RedirectResponse(
+                "/signup?message=An+account+already+uses+that+username+or+email.",
+                status_code=303,
+            )
+
+        user = User(
+            full_name=full_name,
+            username=username,
+            email=email,
+            mobile=mobile,
+            password_digest=password_digest,
+            passcode_digest=passcode_digest,
+            credential_type=credential_type,
+            email_verified=False,
+            failed_login_attempts=0,
+        )
+
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        try:
+            send_verification(user)
+        except Exception:
+            db.delete(user)
+            db.commit()
+
+            return RedirectResponse(
+                "/signup?message=We+could+not+send+the+verification+email.",
+                status_code=303,
+            )
+
+    request.session.clear()
+
+    return RedirectResponse(
+        "/login?message=Verification+email+sent.+Please+verify+your+email.",
+        status_code=303,
+    )
+
+
+@app.get("/verify-email")
+def verify_email(request: Request, token: str):
+    try:
+        data = serializer.loads(
+            token,
+            salt="qafox-email-verification",
+            max_age=86400,
+        )
+    except SignatureExpired:
+        return RedirectResponse(
+            "/login?message=Verification+link+expired.",
+            status_code=303,
+        )
+    except BadSignature:
+        return RedirectResponse(
+            "/login?message=Invalid+verification+link.",
+            status_code=303,
+        )
+
+    if data.get("purpose") != "verify-email":
+        return RedirectResponse(
+            "/login?message=Invalid+verification+request.",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        user = db.get(User, int(data["user_id"]))
+
+        if (
+            not user
+            or user.email != data.get("email")
+            or not user.is_active
+        ):
+            return RedirectResponse(
+                "/login?message=Account+could+not+be+verified.",
+                status_code=303,
+            )
+
+        user.email_verified = True
+        db.commit()
+
+    return RedirectResponse(
+        "/login?message=Email+verified.+You+can+now+sign+in.",
+        status_code=303,
+    )
+
+
+
+@app.get("/login")
+def login_page(request: Request, message: str = ""):
+    token = csrf_token(request)
+
+    content = f"""
+<section class="auth-shell login-shell">
+    <div class="auth-art">
+        <span class="pill">WELCOME BACK</span>
+        <h1>Your private quality<br>workspace awaits.</h1>
+        <p>
+            Continue API testing and build complete
+            quality confidence with Qubi.
+        </p>
+
+        <div class="login-qubi">🦊</div>
+    </div>
+
+    <form class="auth-card" method="post" action="/login">
+        <span class="auth-kicker">SECURE SIGN IN</span>
+        <h2>Welcome back</h2>
+        <p>
+            Enter your password or 6-digit passcode.
+        </p>
+
+        {auth_message(message)}
+
+        <input type="hidden" name="csrf"
+               value="{esc(token)}">
+
+        <label>
+            Username or email
+            <input name="identity" required maxlength="320"
+                   autocomplete="username">
+        </label>
+
+        <label>
+            Password or passcode
+            <input type="password" name="credential" required
+                   minlength="6" maxlength="128"
+                   autocomplete="current-password"
+                   inputmode="text">
+        </label>
+
+        <div class="passcode-warning">
+            🔐 Passcode accounts lock temporarily after
+            repeated failed attempts.
+        </div>
+
+        <button class="primary-button full" type="submit">
+            Sign in securely
+        </button>
+
+        <div class="auth-links split">
+            <a href="/forgot-password">Forgot password?</a>
+            <a href="/forgot-username">Forgot username?</a>
+        </div>
+
+        <div class="auth-links">
+            New to QAFox?
+            <a href="/signup">Create account</a>
+        </div>
+    </form>
+</section>
+"""
+
+    return layout("Sign in", content, request)
+
+
+
+@app.post("/login")
+def login(
+    request: Request,
+    identity: str = Form(...),
+    credential: str = Form(...),
+    csrf: str = Form(...),
+):
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            "/login?message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    identity = identity.strip().lower()
+    now = datetime.now(timezone.utc)
+
+    with Session(engine) as db:
+        user = db.query(User).filter(
+            or_(
+                User.username == identity,
+                User.email == identity,
+            )
+        ).first()
+
+        if user and user.locked_until:
+            locked_until = user.locked_until
+
+            if locked_until.tzinfo is None:
+                locked_until = locked_until.replace(
+                    tzinfo=timezone.utc
+                )
+
+            if locked_until > now:
+                return RedirectResponse(
+                    "/login?message=Account+temporarily+locked.+Try+again+later.",
+                    status_code=303,
+                )
+
+            user.locked_until = None
+            user.failed_login_attempts = 0
+            db.commit()
+
+        valid = False
+
+        if user and user.is_active:
+            try:
+                if (
+                    user.credential_type == "passcode"
+                    and user.passcode_digest
+                ):
+                    valid = (
+                        len(credential) == 6
+                        and credential.isdigit()
+                        and password_hash.verify(
+                            credential,
+                            user.passcode_digest,
+                        )
+                    )
+                else:
+                    valid = password_hash.verify(
+                        credential,
+                        user.password_digest,
+                    )
+            except Exception:
+                valid = False
+
+        if not valid:
+            if user and user.is_active:
+                user.failed_login_attempts = (
+                    user.failed_login_attempts or 0
+                ) + 1
+
+                if user.failed_login_attempts >= 5:
+                    user.locked_until = (
+                        now + timedelta(minutes=15)
+                    )
+                    user.failed_login_attempts = 0
+
+                db.commit()
+
+            return RedirectResponse(
+                "/login?message=Invalid+username,+email+or+credential.",
+                status_code=303,
+            )
+
+        if not user.email_verified:
+            return RedirectResponse(
+                "/login?message=Verify+your+email+before+signing+in.",
+                status_code=303,
+            )
+
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.last_login_at = now
+        db.commit()
+
+        request.session.clear()
+
+        if user.mfa_enabled:
+            request.session["pending_mfa_user_id"] = user.id
+            request.session["pending_mfa_auth_version"] = (
+                user.auth_version
+            )
+            request.session["mfa_attempts"] = 0
+            request.session["csrf_token"] = (
+                secrets.token_urlsafe(32)
+            )
+
+            return RedirectResponse(
+                "/mfa/verify",
+                status_code=303,
+            )
+
+        request.session["user_id"] = user.id
+        request.session["auth_version"] = user.auth_version
+        request.session["csrf_token"] = (
+            secrets.token_urlsafe(32)
+        )
+
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.get("/recovery-placeholder-password")
+def forgot_password(request: Request):
+    content = """
+<section class="simple-card">
+    <div class="big-icon">🔐</div>
+    <h1>Password recovery</h1>
+    <p>
+        Secure password-reset delivery will be enabled in
+        PATCH-QAFOX-002. Your existing password cannot be viewed
+        by QAFox administrators.
+    </p>
+    <a class="primary-button" href="/login">Return to sign in</a>
+</section>
+"""
+    return layout("Password recovery", content, request)
+
+
+@app.get("/recovery-placeholder-username")
+def forgot_username(request: Request):
+    content = """
+<section class="simple-card">
+    <div class="big-icon">✉️</div>
+    <h1>Username recovery</h1>
+    <p>
+        Email-based username recovery will be enabled in
+        PATCH-QAFOX-002 without revealing whether an account exists.
+    </p>
+    <a class="primary-button" href="/login">Return to sign in</a>
+</section>
+"""
+    return layout("Username recovery", content, request)
+
+
+@app.get("/dashboard")
+def dashboard(request: Request):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    content = f"""
+<section class="dashboard-header">
+    <div>
+        <span>PRIVATE QUALITY ENGINEERING WORKSPACE</span>
+        <h1>Good to see you, {esc(user.full_name)}! 👋</h1>
+        <p>
+            API Testing is your first active QAFox module.
+        </p>
+    </div>
+    <a class="primary-button" href="/projects/new">
+        + New project
+    </a>
+</section>
+
+<section class="dashboard-grid">
+    <article class="welcome-panel">
+        <span>PHASE 1 · API TESTING</span>
+        <h2>Upload. Discover. Test. Report.</h2>
+        <p>
+            Bring a ZIP, TAR, project folder, OpenAPI document or
+            Postman collection. Qubi will discover the APIs and
+            prepare a detailed test inventory.
+        </p>
+        <a class="primary-button" href="/projects/new">
+            Upload first project
+        </a>
+        <div class="dashboard-qubi">🦊</div>
+    </article>
+
+    <article class="privacy-panel">
+        <span>🛡</span>
+        <h3>Your workspace is private</h3>
+        <p>
+            Project access is bound to your authenticated account.
+            Cross-user project visibility is prohibited.
+        </p>
+    </article>
+</section>
+
+<section class="dashboard-tools">
+    <h2>Your quality toolkit</h2>
+    <div class="cards">
+        <article class="active-card">
+            <i>↗</i><b>Active</b>
+            <h3>API Testing</h3>
+            <p>Discovery, auditing, execution and reports.</p>
+        </article>
+        <article>
+            <i>✓</i><b>Coming next</b>
+            <h3>Manual Testing</h3>
+            <p>Cases, plans, evidence and traceability.</p>
+        </article>
+        <article>
+            <i>⚙</i><b>Roadmap</b>
+            <h3>Automation Testing</h3>
+            <p>Web and mobile automated test suites.</p>
+        </article>
+    </div>
+</section>
+"""
+    return layout("Dashboard", content, request, public=False)
+
+
+@app.get("/project-upload-placeholder")
+def new_project(request: Request):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    content = """
+<section class="simple-card">
+    <div class="big-icon">📁</div>
+    <span class="pill dark">API TESTING · PHASE 1</span>
+    <h1>Secure project upload</h1>
+    <p>
+        Private ZIP, TAR, folder and API-definition uploads will
+        arrive in PATCH-QAFOX-002 with isolated extraction,
+        ownership enforcement and automatic secret masking.
+    </p>
+    <a class="primary-button" href="/dashboard">
+        Return to dashboard
+    </a>
+</section>
+"""
+    return layout("New project", content, request, public=False)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie("qafox_session")
+    return response
+
+
+# Secure account-recovery routes
+from app.recovery import router as recovery_router
+
+app.include_router(recovery_router)
+
+
+# Authenticator MFA and recovery-code routes
+from app.mfa import router as mfa_router
+
+app.include_router(mfa_router)
+
+
+# Private project upload and ownership-isolated routes
+from app.projects import router as projects_router
+
+app.include_router(projects_router)
+
+
+# API discovery and ownership-isolated inventory routes
+from app.api_discovery import router as api_discovery_router
+
+app.include_router(api_discovery_router)
+
+
+# Hardened one-time automated API runner
+from app.automated_runner import (
+    router as automated_runner_router,
+)
+
+app.include_router(automated_runner_router)
+
+
+# Immutable execution planning and approval
+from app.execution_planning import (
+    router as execution_planning_router,
+)
+
+app.include_router(execution_planning_router)
+
+
+# AI-generated and human-reviewable API test cases
+from app.test_case_generation import (
+    router as test_case_generation_router,
+)
+
+app.include_router(test_case_generation_router)
+
+
+# AI smart-configuration static routes must be registered
+# before the dynamic configuration-ID routes.
+from app.smart_configuration import (
+    router as smart_configuration_router,
+)
+
+app.include_router(smart_configuration_router)
+
+
+# Encrypted API test-configuration routes
+from app.test_configuration import (
+    router as test_configuration_router,
+)
+
+app.include_router(test_configuration_router)
+
