@@ -246,21 +246,42 @@ def layout(
     public: bool = True,
 ) -> HTMLResponse:
     user = current_user(request)
-    account = ""
+    current_path = request.url.path
+    home_href = "/dashboard" if user else "/"
 
     if user:
+        nav_items = (
+            ("/dashboard", "Dashboard"),
+            ("/projects", "Projects"),
+            ("/security/mfa", "Security"),
+            ("/logout", "Log out"),
+        )
         account = f"""
-        <div class="user-menu">
+        <div class="user-chip" aria-hidden="false">
             <span>{esc(user.full_name[:1].upper())}</span>
             <div>
                 <strong>{esc(user.full_name)}</strong>
                 <small>@{esc(user.username)}</small>
             </div>
-            <a href="/projects">Projects</a>
-            <a href="/security/mfa">Security</a>
-            <a href="/logout">Logout</a>
         </div>
         """
+    else:
+        nav_items = (
+            ("/", "Home"),
+            ("/privacy", "Privacy"),
+            ("/login", "Sign in"),
+            ("/signup", "Create workspace"),
+        )
+        account = ""
+
+    nav_links = "".join(
+        f"""<a href="{esc(href)}"
+              class="site-nav-link{' is-active' if current_path == href or (href != '/' and current_path.startswith(href)) else ''}"
+              {'data-nav-logout="true"' if href == '/logout' else ''}>
+              {esc(label)}
+           </a>"""
+        for href, label in nav_items
+    )
 
     return HTMLResponse(
         f"""<!doctype html>
@@ -268,16 +289,18 @@ def layout(
 <head>
 <meta charset="utf-8">
 <meta name="viewport"
-      content="width=device-width,initial-scale=1">
+      content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{esc(title)} · QAFox</title>
 <meta name="description"
       content="Private quality engineering workspace">
 <meta name="theme-color" content="#281463">
 <meta name="application-name" content="QAFox">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style"
-      content="default">
+      content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="QAFox">
+<meta name="format-detection" content="telephone=no">
 <link rel="manifest"
       href="/static/manifest.webmanifest">
 <link rel="icon"
@@ -285,18 +308,40 @@ def layout(
       sizes="192x192"
       href="/static/icons/qafox-192.png">
 <link rel="apple-touch-icon"
+      sizes="180x180"
+      href="/static/icons/qafox-192.png">
+<link rel="apple-touch-icon"
+      sizes="192x192"
       href="/static/icons/qafox-192.png">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
-    <a class="brand" href="/">
+    <a class="brand" href="{esc(home_href)}">
         <span class="fox-logo">🦊</span>
         <strong>QA<span>Fox</span></strong>
     </a>
-    {account}
+    <nav id="qafox-site-nav"
+         class="site-nav"
+         aria-label="Main">
+        {nav_links}
+    </nav>
+    <div class="topbar-end">
+        {account}
+        <button type="button"
+                class="nav-toggle"
+                id="qafox-nav-toggle"
+                aria-controls="qafox-site-nav"
+                aria-expanded="false">
+            <span class="nav-toggle-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Open menu</span>
+        </button>
+    </div>
 </header>
+<div class="nav-backdrop"
+     id="qafox-nav-backdrop"
+     hidden></div>
 <main class="{'public-main' if public else 'dashboard-main'}">
 {content}
 </main>
@@ -311,7 +356,7 @@ def layout(
         </a>
     </span>
     <span>
-        PWA supported ·
+        Installable PWA ·
         Your private quality engineering workspace.
     </span>
 </footer>

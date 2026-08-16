@@ -3,9 +3,16 @@
   "name": "QAFox — Quality Engineering Platform",
   "short_name": "QAFox",
   "description": "Privacy-first quality engineering workspace for API, manual, automation, security and performance testing.",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
   "orientation": "any",
   "background_color": "#f7f8fc",
   "theme_color": "#281463",
@@ -33,6 +40,19 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Projects",
+      "short_name": "Projects",
+      "description": "Open your private QAFox projects",
+      "url": "/projects"
+    },
+    {
+      "name": "Sign in",
+      "short_name": "Sign in",
+      "url": "/login"
     }
   ]
 }

@@ -1,6 +1,47 @@
 (() => {
   "use strict";
 
+  const toggle = document.getElementById("qafox-nav-toggle");
+  const nav = document.getElementById("qafox-site-nav");
+  const backdrop = document.getElementById("qafox-nav-backdrop");
+  const label = toggle && toggle.querySelector(".visually-hidden");
+
+  if (!toggle || !nav || !backdrop) {
+    return;
+  }
+
+  const setOpen = (open) => {
+    nav.classList.toggle("is-open", open);
+    document.body.classList.toggle("nav-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (label) {
+      label.textContent = open ? "Close menu" : "Open menu";
+    }
+    backdrop.hidden = !open;
+  };
+
+  toggle.addEventListener("click", () => {
+    setOpen(!nav.classList.contains("is-open"));
+  });
+
+  backdrop.addEventListener("click", () => setOpen(false));
+
+  nav.addEventListener("click", (event) => {
+    if (event.target.closest("a")) {
+      setOpen(false);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setOpen(false);
+    }
+  });
+})();
+
+(() => {
+  "use strict";
+
   if (!("serviceWorker" in navigator)) {
     return;
   }
