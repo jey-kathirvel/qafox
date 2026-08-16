@@ -53,6 +53,9 @@ ALLOWED_CASE_TYPES = {
     "boundary",
     "path-parameter",
     "content-type",
+    "security",
+    "performance",
+    "manual",
 }
 
 ALLOWED_STATUS_VALUES = re.compile(
@@ -1083,6 +1086,120 @@ def generate_test_cases(
     )
 
 
+@router.post(
+    "/projects/{public_id}/test-cases/manual"
+)
+def create_manual_test_case(
+    request: Request,
+    public_id: str,
+    csrf: str = Form(...),
+    inventory_id: str = Form(...),
+    title: str = Form(...),
+    expected_status_codes: str = Form("200"),
+    expected_behavior: str = Form(...),
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            f"/projects/{public_id}/test-cases"
+            "?error=Security+validation+failed.",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+        endpoint_id = int(inventory_id)
+    except ValueError:
+        return RedirectResponse(
+            f"/projects/{public_id}/test-cases"
+            "?error=Select+a+discovered+endpoint.",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = owned_project(
+            db,
+            user.id,
+            public_id,
+        )
+
+        if not project:
+            return RedirectResponse(
+                "/projects",
+                status_code=303,
+            )
+
+        inventory = latest_inventory(
+            db,
+            user.id,
+            project["id"],
+        )
+        endpoint = next(
+            (
+                item
+                for item in inventory
+                if int(item["id"]) == endpoint_id
+            ),
+            None,
+        )
+
+        if not endpoint:
+            return RedirectResponse(
+                f"/projects/{public_id}/test-cases"
+                "?error=That+endpoint+is+not+in+the+current+inventory.",
+                status_code=303,
+            )
+
+        title = title.strip()
+        expected_behavior = expected_behavior.strip()
+        expected_status_codes = expected_status_codes.strip() or "200"
+
+        if len(title) < 2:
+            return RedirectResponse(
+                f"/projects/{public_id}/test-cases"
+                "?error=Enter+a+manual+case+title.",
+                status_code=303,
+            )
+
+        if not ALLOWED_STATUS_VALUES.fullmatch(expected_status_codes):
+            return RedirectResponse(
+                f"/projects/{public_id}/test-cases"
+                "?error=Expected+status+codes+are+invalid.",
+                status_code=303,
+            )
+
+        item = make_case(
+            endpoint,
+            "manual",
+            title[:200],
+            "Human-authored case for UAT coverage.",
+            expected_status_codes,
+            expected_behavior[:400],
+            100,
+        )
+        item["generation_source"] = "human"
+        insert_generated_case(
+            db,
+            project["id"],
+            user.id,
+            item,
+        )
+        db.commit()
+
+    return RedirectResponse(
+        f"/projects/{public_id}/test-cases"
+        "?message=Manual+test+case+saved.",
+        status_code=303,
+    )
+
+
 @router.get(
     "/projects/{public_id}/test-cases",
     response_class=HTMLResponse,
@@ -1189,7 +1306,20 @@ def test_case_list(
             parameters,
         ).mappings().one()
 
+        inventory = latest_inventory(
+            db,
+            user.id,
+            project["id"],
+        )
+
     csrf = csrf_token(request)
+
+    inventory_options = "".join(
+        f'<option value="{esc(str(item["id"]))}">'
+        f'{esc(item["http_method"])} {esc(item["endpoint_path"])}'
+        f"</option>"
+        for item in inventory
+    )
 
     rows = ""
 
@@ -1350,6 +1480,22 @@ def test_case_list(
         <button class="outline-dark-button"
                 type="submit">
             Apply filters
+        </button>
+    </form>
+
+    <form class="test-case-filters"
+          method="post"
+          action="/projects/{esc(public_id)}/test-cases/manual">
+        <input type="hidden" name="csrf" value="{esc(csrf)}">
+        <select name="inventory_id" required>
+            <option value="">Inventory endpoint</option>
+            {inventory_options}
+        </select>
+        <input name="title" required maxlength="200" placeholder="Manual case title">
+        <input name="expected_status_codes" maxlength="40" value="200" placeholder="Expected status">
+        <input name="expected_behavior" required maxlength="400" placeholder="Expected behaviour">
+        <button class="outline-dark-button" type="submit">
+            Add manual case
         </button>
     </form>
 

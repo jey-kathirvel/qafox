@@ -28,9 +28,19 @@ class CanonicalPathTests(TestCase):
 
 class RegistryTests(TestCase):
     def test_default_registry_includes_supported_adapters(self):
-        self.assertEqual(
-            default_registry().names(),
-            ("fastapi", "flask", "openapi", "postman"),
+        self.assertTrue(
+            {
+                "fastapi",
+                "flask",
+                "openapi",
+                "postman",
+                "express",
+                "nestjs",
+                "django",
+                "spring",
+                "laravel",
+                "aspnet",
+            }.issubset(set(default_registry().names()))
         )
 
 

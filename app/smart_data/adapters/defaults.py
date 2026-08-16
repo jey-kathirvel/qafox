@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from app.smart_data.adapters.community import (
+    AspNetAdapter,
+    DjangoAdapter,
+    ExpressAdapter,
+    LaravelAdapter,
+    NestJSAdapter,
+    SpringAdapter,
+)
 from app.smart_data.adapters.fastapi import FastAPIAdapter
 from app.smart_data.adapters.flask import FlaskAdapter
 from app.smart_data.adapters.openapi import OpenAPIAdapter
@@ -16,5 +24,11 @@ def default_registry() -> AdapterRegistry:
             PostmanAdapter(),
             FastAPIAdapter(),
             FlaskAdapter(),
+            ExpressAdapter(),
+            NestJSAdapter(),
+            DjangoAdapter(),
+            SpringAdapter(),
+            LaravelAdapter(),
+            AspNetAdapter(),
         )
     )

@@ -39,6 +39,8 @@ ALLOWED_AUTH_TYPES = {
     "bearer",
     "api_key",
     "basic",
+    "oauth2",
+    "login_json",
 }
 
 PROHIBITED_HEADERS = {
@@ -350,6 +352,11 @@ def auth_summary(
         )
 
         return f"API key · {header} · {location}"
+
+    if auth_type == "oauth2":
+        return "OAuth2 client credentials configured"
+    if auth_type == "login_json":
+        return "JSON login handshake configured"
 
     return "Authentication configured"
 
@@ -828,6 +835,78 @@ def configuration_form_page(
             </label>
         </div>
 
+        <div class="auth-config-fields"
+             data-auth-section="oauth2">
+            <p>
+                QAFox POSTs client credentials to a public HTTPS token URL,
+                then sends <code>Authorization: Bearer</code> for this run.
+                Cookie sessions are not used.
+            </p>
+            <label>
+                Token URL
+                <input type="url"
+                       name="oauth_token_url"
+                       maxlength="2048"
+                       value="{esc(auth_config.get('token_url', ''))}"
+                       placeholder="https://auth.example.com/oauth/token">
+            </label>
+            <label>
+                Client ID
+                <input name="oauth_client_id"
+                       maxlength="320"
+                       autocomplete="off"
+                       value="{esc(auth_config.get('client_id', ''))}">
+            </label>
+            <label>
+                Client secret
+                <input type="password"
+                       name="oauth_client_secret"
+                       maxlength="8192"
+                       autocomplete="new-password"
+                       placeholder="{
+                           'Leave blank to retain existing secret'
+                           if auth_config.get('client_secret')
+                           else 'Enter client secret'
+                       }">
+            </label>
+        </div>
+
+        <div class="auth-config-fields"
+             data-auth-section="login_json">
+            <p>
+                QAFox POSTs username and password as JSON and reads an access
+                token from the body. MFA challenges stop automation; store a
+                vault bearer token instead.
+            </p>
+            <label>
+                Login URL
+                <input type="url"
+                       name="login_url"
+                       maxlength="2048"
+                       value="{esc(auth_config.get('login_url', ''))}"
+                       placeholder="https://api.example.com/login">
+            </label>
+            <label>
+                Username
+                <input name="login_username"
+                       maxlength="320"
+                       autocomplete="off"
+                       value="{esc(auth_config.get('username', ''))}">
+            </label>
+            <label>
+                Password
+                <input type="password"
+                       name="login_password"
+                       maxlength="8192"
+                       autocomplete="new-password"
+                       placeholder="{
+                           'Leave blank to retain existing password'
+                           if auth_config.get('password')
+                           else 'Enter password'
+                       }">
+            </label>
+        </div>
+
         <label>
             Custom headers
             <small>
@@ -972,6 +1051,12 @@ def build_auth_configuration(
     api_key_value: str,
     basic_username: str,
     basic_password: str,
+    oauth_token_url: str = "",
+    oauth_client_id: str = "",
+    oauth_client_secret: str = "",
+    login_url: str = "",
+    login_username: str = "",
+    login_password: str = "",
 ) -> dict:
     if auth_type == "none":
         return {}
@@ -1037,6 +1122,66 @@ def build_auth_configuration(
             "password": password,
         }
 
+    if auth_type == "oauth2":
+        token_url = oauth_token_url.strip() or existing.get(
+            "token_url",
+            "",
+        )
+        client_id = oauth_client_id.strip() or existing.get(
+            "client_id",
+            "",
+        )
+        client_secret = oauth_client_secret.strip() or existing.get(
+            "client_secret",
+            "",
+        )
+
+        if not token_url or not client_id or not client_secret:
+            raise ConfigurationRejected(
+                "OAuth2 token URL, client ID, and client secret are required."
+            )
+
+        if not token_url.lower().startswith("https://"):
+            raise ConfigurationRejected(
+                "OAuth2 token URL must be public HTTPS."
+            )
+
+        return {
+            "token_url": token_url[:2048],
+            "client_id": client_id[:320],
+            "client_secret": client_secret,
+        }
+
+    if auth_type == "login_json":
+        resolved_login_url = login_url.strip() or existing.get(
+            "login_url",
+            "",
+        )
+        username = login_username.strip() or existing.get(
+            "username",
+            "",
+        )
+        password = login_password or existing.get(
+            "password",
+            "",
+        )
+
+        if not resolved_login_url or not username or not password:
+            raise ConfigurationRejected(
+                "JSON login URL, username, and password are required."
+            )
+
+        if not resolved_login_url.lower().startswith("https://"):
+            raise ConfigurationRejected(
+                "JSON login URL must be public HTTPS."
+            )
+
+        return {
+            "login_url": resolved_login_url[:2048],
+            "username": username[:320],
+            "password": password,
+        }
+
     raise ConfigurationRejected(
         "Choose a valid authentication type."
     )
@@ -1056,6 +1201,12 @@ def save_configuration(
     api_key_value: str,
     basic_username: str,
     basic_password: str,
+    oauth_token_url: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    login_url: str,
+    login_username: str,
+    login_password: str,
     custom_headers: str,
     request_timeout_seconds: int,
     retry_count: int,
@@ -1161,6 +1312,12 @@ def save_configuration(
                 api_key_value,
                 basic_username,
                 basic_password,
+                oauth_token_url,
+                oauth_client_id,
+                oauth_client_secret,
+                login_url,
+                login_username,
+                login_password,
             )
 
             timeout = int(request_timeout_seconds)
@@ -1368,6 +1525,12 @@ def create_configuration(
     api_key_value: str = Form(""),
     basic_username: str = Form(""),
     basic_password: str = Form(""),
+    oauth_token_url: str = Form(""),
+    oauth_client_id: str = Form(""),
+    oauth_client_secret: str = Form(""),
+    login_url: str = Form(""),
+    login_username: str = Form(""),
+    login_password: str = Form(""),
     custom_headers: str = Form(""),
     request_timeout_seconds: int = Form(15),
     retry_count: int = Form(0),
@@ -1388,6 +1551,12 @@ def create_configuration(
         api_key_value,
         basic_username,
         basic_password,
+        oauth_token_url,
+        oauth_client_id,
+        oauth_client_secret,
+        login_url,
+        login_username,
+        login_password,
         custom_headers,
         request_timeout_seconds,
         retry_count,
@@ -1466,6 +1635,12 @@ def update_configuration(
     api_key_value: str = Form(""),
     basic_username: str = Form(""),
     basic_password: str = Form(""),
+    oauth_token_url: str = Form(""),
+    oauth_client_id: str = Form(""),
+    oauth_client_secret: str = Form(""),
+    login_url: str = Form(""),
+    login_username: str = Form(""),
+    login_password: str = Form(""),
     custom_headers: str = Form(""),
     request_timeout_seconds: int = Form(15),
     retry_count: int = Form(0),
@@ -1486,6 +1661,12 @@ def update_configuration(
         api_key_value,
         basic_username,
         basic_password,
+        oauth_token_url,
+        oauth_client_id,
+        oauth_client_secret,
+        login_url,
+        login_username,
+        login_password,
         custom_headers,
         request_timeout_seconds,
         retry_count,

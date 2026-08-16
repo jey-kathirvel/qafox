@@ -38,7 +38,13 @@ from app.smart_data.orchestration import (
     remaining_dynamic,
     substitute_placeholders,
 )
+from app.smart_data.auth_handshake import (
+    extract_access_token,
+    extract_csrf_header,
+    handshake_request,
+)
 from app.smart_data.placeholders import approval_blockers
+from app.smart_data.root_cause import classify_root_cause
 
 router = APIRouter()
 
@@ -292,6 +298,8 @@ def sanitize_headers(headers):
 def build_runtime_headers(
     configuration,
     case_headers,
+    runtime_bearer="",
+    extra_headers=None,
 ):
     custom_headers = decrypt_json(
         configuration[
@@ -310,6 +318,10 @@ def build_runtime_headers(
     )
 
     headers.update(
+        sanitize_headers(extra_headers or {})
+    )
+
+    headers.update(
         sanitize_headers(case_headers)
     )
 
@@ -317,7 +329,12 @@ def build_runtime_headers(
         configuration["auth_type"] or "none"
     )
 
-    if auth_type == "bearer":
+    if runtime_bearer:
+        headers["Authorization"] = (
+            f"Bearer {runtime_bearer}"
+        )
+
+    elif auth_type == "bearer":
         token = str(
             auth.get(
                 "token",
@@ -376,6 +393,14 @@ def build_runtime_headers(
     for value in custom_headers.values():
         if isinstance(value, str):
             secret_values.append(value)
+
+    if runtime_bearer:
+        secret_values.append(runtime_bearer)
+
+    if extra_headers:
+        for value in extra_headers.values():
+            if isinstance(value, str):
+                secret_values.append(value)
 
     return headers, secret_values
 
@@ -746,8 +771,11 @@ def store_result(
             "response_size_bytes":
                 response_size,
             "error_message": error_message,
-            "assertion_summary":
+            "assertion_summary": _with_root_cause(
+                status,
                 assertion_summary,
+                error_message,
+            ),
             "started_at": started_at,
             "completed_at": utc_now(),
             "created_at": utc_now(),
@@ -761,6 +789,39 @@ def store_result(
     )
 
     db.commit()
+
+
+def _with_root_cause(status, assertion_summary, error_message):
+    summary = str(assertion_summary or "").strip()
+    cause = classify_root_cause(
+        status=str(status or ""),
+        assertion_summary=summary,
+        error_message=str(error_message or ""),
+    )
+    if not cause:
+        return summary
+    if cause.lower() in summary.lower():
+        return summary
+    return f"{summary} Root cause: {cause}".strip()
+
+
+def mark_run_error(db, run_id, message=""):
+    db.execute(
+        text(
+            """
+            UPDATE api_test_runs
+            SET status = 'error',
+                completed_at = :completed_at
+            WHERE id = :run_id
+            """
+        ),
+        {
+            "completed_at": utc_now(),
+            "run_id": run_id,
+        },
+    )
+    db.commit()
+    return message
 
 
 def sort_plan_cases(cases, orchestration):
@@ -984,6 +1045,45 @@ def execute_run(run_id: int):
             ),
         )
 
+        runtime_bearer = ""
+        handshake_headers = {}
+        auth_blob = decrypt_json(
+            configuration["encrypted_auth_config"]
+        )
+        try:
+            handshake = handshake_request(
+                str(configuration["auth_type"] or "none"),
+                auth_blob,
+            )
+            if handshake:
+                validate_target_url(handshake["url"])
+                handshake_response = execute_https_request(
+                    handshake["url"],
+                    handshake["method"],
+                    handshake["headers"],
+                    handshake["body"],
+                    timeout,
+                )
+                handshake_body = handshake_response["body"].decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                if handshake_response["status_code"] >= 400:
+                    raise ValueError(
+                        "OAuth token handshake failed with HTTP "
+                        + str(handshake_response["status_code"])
+                    )
+                runtime_bearer = extract_access_token(
+                    handshake_body,
+                    handshake.get("extract", "access_token"),
+                )
+                csrf_header = extract_csrf_header(handshake_body)
+                if csrf_header:
+                    handshake_headers[csrf_header[0]] = csrf_header[1]
+        except Exception:
+            mark_run_error(db, run["id"])
+            return
+
         for sequence, plan_case in enumerate(
             cases,
             start=1,
@@ -1129,6 +1229,8 @@ def execute_run(run_id: int):
                             "request_headers",
                             {},
                         ),
+                        runtime_bearer,
+                        handshake_headers,
                     )
                 )
                 secret_values = list(secret_values) + list(store.captured_secrets)
@@ -1374,6 +1476,8 @@ def execute_run(run_id: int):
                     headers, secret_values = build_runtime_headers(
                         configuration,
                         {},
+                        runtime_bearer,
+                        handshake_headers,
                     )
                     secret_values = list(secret_values) + list(store.captured_secrets)
                     request_started = time.monotonic()
@@ -1903,6 +2007,22 @@ def run_results_page(
         {stop_form}
     </div>
 
+    {
+        ""
+        if active
+        else f'''
+    <p>
+        <a href="/projects/{esc(public_id)}/execution-runs/{esc(run_public_id)}/report">
+            Download JSON report
+        </a>
+        ·
+        <a href="/projects/{esc(public_id)}/execution-runs/{esc(run_public_id)}/report?format=html">
+            HTML report
+        </a>
+    </p>
+        '''
+    }
+
     <div class="runner-progress">
         <div>
             <strong>
@@ -2019,6 +2139,137 @@ async def stop_run(
         f"/projects/{public_id}/execution-runs/{run_public_id}",
         status_code=303,
     )
+
+
+@router.get(
+    "/projects/{public_id}/execution-runs/{run_public_id}/report"
+)
+def run_report(
+    request: Request,
+    public_id: str,
+    run_public_id: str,
+    format: str = "json",
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+        uuid.UUID(run_public_id)
+    except ValueError:
+        return RedirectResponse(
+            "/projects",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = owned_project(
+            db,
+            user.id,
+            public_id,
+        )
+
+        if not project:
+            return RedirectResponse(
+                "/projects",
+                status_code=303,
+            )
+
+        run = (
+            db.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM api_test_runs
+                    WHERE public_id = :public_id
+                      AND project_id = :project_id
+                      AND owner_user_id = :owner_user_id
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "public_id": run_public_id,
+                    "project_id": project["id"],
+                    "owner_user_id": user.id,
+                },
+            )
+            .mappings()
+            .first()
+        )
+
+        if not run:
+            return RedirectResponse(
+                f"/projects/{public_id}/test-cases",
+                status_code=303,
+            )
+
+        results = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                        sequence_number,
+                        status,
+                        http_method,
+                        endpoint_path,
+                        expected_status_codes,
+                        actual_status_code,
+                        duration_ms,
+                        assertion_summary,
+                        error_message
+                    FROM api_test_results
+                    WHERE test_run_id = :run_id
+                      AND owner_user_id = :owner_user_id
+                    ORDER BY sequence_number
+                    """
+                ),
+                {
+                    "run_id": run["id"],
+                    "owner_user_id": user.id,
+                },
+            )
+            .mappings()
+            .all()
+        )
+
+    payload = {
+        "run_id": run["public_id"],
+        "status": run["status"],
+        "passed": run["passed_count"],
+        "failed": run["failed_count"],
+        "error": run["error_count"],
+        "skipped": run["skipped_count"],
+        "total": run["total_count"],
+        "completed": run["completed_count"],
+        "results": [dict(item) for item in results],
+    }
+
+    if str(format or "json").lower() == "html":
+        rows = "".join(
+            f"<tr><td>{esc(str(item['sequence_number']))}</td>"
+            f"<td>{esc(item['http_method'])} {esc(item['endpoint_path'])}</td>"
+            f"<td>{esc(item['status'])}</td>"
+            f"<td>{esc(str(item['actual_status_code'] or ''))}</td>"
+            f"<td>{esc(item['assertion_summary'] or '')}</td></tr>"
+            for item in results
+        ) or "<tr><td colspan='5'>No results</td></tr>"
+        return HTMLResponse(
+            f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>QAFox run report</title></head>
+<body>
+<h1>Run {esc(run["public_id"])}</h1>
+<p>Status {esc(run["status"])} · passed {esc(str(run["passed_count"]))} · failed {esc(str(run["failed_count"]))} · error {esc(str(run["error_count"]))} · skipped {esc(str(run["skipped_count"]))}</p>
+<table border="1" cellpadding="6"><thead><tr><th>#</th><th>Request</th><th>Result</th><th>HTTP</th><th>Root cause / assertions</th></tr></thead><tbody>{rows}</tbody></table>
+</body></html>
+"""
+        )
+
+    return JSONResponse(payload)
 
 
 @router.get(

@@ -18,11 +18,13 @@ QAFox starts with API testing and is intended to expand into manual, automation,
 - Framework-aware route composition and API-prefix inference
 - Editable smart environment configuration with confidence and evidence
 - Encrypted authentication values and custom headers
-- AI-focused positive, negative, authorization, validation, boundary, path-parameter, and content-type test-case generation
+- AI-focused positive, negative, authorization, validation, boundary, path-parameter, content-type, security, performance, and human-authored manual test cases
 - Smart test-data inference from schemas and source evidence
 - Human review, enable/disable controls, and explicit approval for state-changing requests
 - Immutable execution plans with SHA-256 fingerprints and one-run approval
 - Hardened execution controls including TLS validation, SSRF defenses, redirect restrictions, secret masking, runtime limits, live results, and stop requests
+- OAuth2 client-credentials and JSON login handshakes that store an access token in memory for one run (cookie sessions and MFA are not automated)
+- Deterministic root-cause labels on results and downloadable JSON/HTML run reports
 - PWA manifest, service worker, offline page, Android icons, and Apple home-screen icon
 
 ## Project-agnostic smart-data architecture
@@ -39,7 +41,7 @@ The smart-data pipeline should:
 6. Resolve prerequisites during execution without executing uploaded source code.
 7. Record provenance, masking decisions, approval identity, and results.
 
-FastAPI and Flask are the first source adapters. Planned adapters include Django/DRF, Express/NestJS, Spring Boot, Laravel, and ASP.NET Core. OpenAPI and Postman remain framework-neutral sources.
+FastAPI, Flask, Express, NestJS, Django, Spring, Laravel, and ASP.NET Core source adapters inspect uploaded text without executing it. Nested Express `use()` mounts, Nest `@Controller` paths, and Django `include()` prefixes are composed from static strings. OpenAPI and Postman remain framework-neutral sources.
 
 ## Safety model
 
@@ -206,5 +208,5 @@ Contributions are welcome. Please open an issue describing the problem, affected
 
 ## License
 
-QAFox is intended to be completely open source. Add an OSI-approved `LICENSE` file before public release and update this section with the selected license. Until that file is added, no specific license grant should be assumed.
+QAFox is licensed under the MIT License. See `LICENSE`.
 

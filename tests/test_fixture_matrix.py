@@ -33,6 +33,14 @@ class FixtureMatrixTests(TestCase):
         self.assertTrue(collected.routes)
         self.assertTrue(any(item.detected and item.framework == "postman" for item in collected.detections))
 
+    def test_community_fixtures_are_discovered(self):
+        express = collect_adapter_contracts(ProjectRef(FIXTURES / "express_app"))
+        nest = collect_adapter_contracts(ProjectRef(FIXTURES / "nestjs_app"))
+        django = collect_adapter_contracts(ProjectRef(FIXTURES / "django_app"))
+        self.assertIn(("GET", "/api/v1/items/:id"), {(r.method, r.path) for r in express.routes})
+        self.assertIn(("GET", "/orders/:id"), {(r.method, r.path) for r in nest.routes})
+        self.assertIn("/api/products/<int:product_id>", {r.path for r in django.routes})
+
     def test_excluded_virtualenv_is_not_scanned(self):
         collected = collect_adapter_contracts(ProjectRef(FIXTURES / "excluded_python"))
         self.assertEqual(collected.routes, [])
