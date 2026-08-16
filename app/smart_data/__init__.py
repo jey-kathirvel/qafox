@@ -18,15 +18,23 @@ from app.smart_data.dependency_graph import (
     DependencyGraphBuilder,
     TestDependencyGraph,
 )
+from app.smart_data.persistence import (
+    PersistenceIsolationError,
+    persist_contracts,
+    load_snapshot,
+)
 
 __all__ = [
     "AdapterRegistry",
+    "PersistenceIsolationError",
     "AuthFlowContract",
     "ConstraintContract",
     "DetectionResult",
     "DependencyGraphBuilder",
     "FieldContract",
     "FrameworkAdapter",
+    "load_snapshot",
+    "persist_contracts",
     "PrerequisiteContract",
     "RouteContract",
     "RuntimeVariableContract",

@@ -76,8 +76,10 @@ app/
   test_case_generation.py  Test-case and smart-data generation
   execution_planning.py    Review, approval, and immutable plans
   automated_runner.py      Hardened automated execution
+  smart_data/              Project-agnostic contracts, adapters, persistence
 static/                     Styles, scripts, icons, and PWA assets
 data/                       Private runtime project data (not committed)
+migrations/                 Numbered SQL patches (start with 004B1A-6)
 ```
 
 The exact layout may evolve; keep domain logic separated from framework-specific adapters.
@@ -128,7 +130,9 @@ Never commit `.env`, encryption keys, SMTP credentials, uploaded projects, datab
 
 ### 4. Prepare the database
 
-Apply the repository's current schema or migration procedure using a least-privileged PostgreSQL role. Database migration commands should be documented here once the migration framework is finalized.
+Apply the repository's current schema or migration procedure using a least-privileged PostgreSQL role.
+
+The first numbered patch is `PATCH-QAFOX-004B1A-6` (smart-data contract persistence). See `migrations/README.md` for backup, forward, rollback, and historical-count commands. Do not apply this patch as a rewrite of existing API, plan, run, or result tables.
 
 ### 5. Run locally
 
