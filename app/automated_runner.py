@@ -27,6 +27,7 @@ from app.main import (
 )
 
 from app.test_configuration import decrypt_json
+from app.smart_data.placeholders import approval_blockers
 
 router = APIRouter()
 
@@ -372,22 +373,8 @@ def build_runtime_headers(
 def unresolved_test_data_marker(
     value,
 ) -> str | None:
-    serialized = json.dumps(
-        value,
-        ensure_ascii=False,
-    )
-
-    match = re.search(
-        r"\{\{(?:REQUIRED|SECRET|DYNAMIC)"
-        r"_[A-Z0-9_]+\}\}",
-        serialized,
-    )
-
-    return (
-        match.group(0)
-        if match
-        else None
-    )
+    blockers = approval_blockers(value)
+    return blockers[0] if blockers else None
 
 def resolve_path(
     path: str,

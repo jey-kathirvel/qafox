@@ -1,0 +1,39 @@
+{
+  "info": {
+    "_postman_id": "00000000-0000-4000-8000-000000000001",
+    "name": "Library collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{access_token}}"}]},
+  "variable": [
+    {"key": "base_url", "value": "https://api.example.test"},
+    {"key": "access_token", "value": "must-not-be-copied", "type": "secret"}
+  ],
+  "item": [
+    {
+      "name": "Books",
+      "item": [
+        {
+          "name": "Create book",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{base_url}}/books", "path": ["books"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Synthetic title\",\"author_id\":1}",
+              "options": {"raw": {"language": "json"}}
+            }
+          }
+        },
+        {
+          "name": "Read book",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "GET",
+            "url": {"raw": "{{base_url}}/books/:book_id", "path": ["books", ":book_id"]}
+          }
+        }
+      ]
+    }
+  ]
+}

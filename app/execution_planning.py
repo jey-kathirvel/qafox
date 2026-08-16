@@ -9,6 +9,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.smart_data.placeholders import approval_blockers
+
 from app.main import (
     csrf_token,
     csrf_valid,
@@ -526,7 +528,7 @@ def approval_page(
                 <input name="approval_statement"
                        maxlength="300"
                        required
-                       placeholder="Example: Approved for Leaf testing environment">
+                       placeholder="Example: Approved for the isolated QA environment">
             </label>
 
             {
@@ -777,6 +779,21 @@ async def create_execution_plan(
                 case,
                 decision,
             )
+
+            if decision in {"included-safe", "approved"}:
+                blockers = approval_blockers(
+                    {
+                        "path": snapshot["endpoint_path"],
+                        "headers": snapshot["request_headers"],
+                        "query": snapshot["request_query"],
+                        "body": snapshot["request_body"],
+                    }
+                )
+                if blockers:
+                    return reject(
+                        "Resolve mandatory test data before approval: "
+                        + blockers[0]
+                    )
 
             snapshots.append(snapshot)
 

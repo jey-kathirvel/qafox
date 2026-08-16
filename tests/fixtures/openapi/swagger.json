@@ -1,0 +1,23 @@
+{
+  "swagger": "2.0",
+  "info": {"title": "Legacy library fixture", "version": "1.0.0"},
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {"apiKey": {"type": "apiKey", "name": "X-API-Key", "in": "header"}},
+  "definitions": {
+    "AuthorInput": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {"name": {"type": "string", "minLength": 2}}
+    }
+  },
+  "paths": {
+    "/authors": {
+      "post": {
+        "security": [{"apiKey": []}],
+        "parameters": [{"name": "body", "in": "body", "required": true, "schema": {"$ref": "#/definitions/AuthorInput"}}],
+        "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "integer"}}}}}
+      }
+    }
+  }
+}

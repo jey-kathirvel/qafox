@@ -6,3 +6,4 @@ python-multipart>=0.0.9,<1.0
 pwdlib[argon2]>=0.2,<1.0
 itsdangerous>=2.2,<3.0
 email-validator>=2.2,<3.0
+PyYAML>=6.0,<7.0

@@ -1,0 +1,61 @@
+openapi: 3.1.0
+info:
+  title: Library fixture
+  version: 1.0.0
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    BookInput:
+      type: object
+      required: [title, author_id]
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 120
+        author_id:
+          type: integer
+          minimum: 1
+        genre:
+          type: string
+          enum: [fiction, reference]
+paths:
+  /books:
+    post:
+      operationId: createBook
+      summary: Create a book
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+  /books/{book_id}:
+    get:
+      operationId: readBook
+      security: []
+      parameters:
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Found

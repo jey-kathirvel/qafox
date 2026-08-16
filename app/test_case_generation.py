@@ -8,6 +8,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.smart_data.contracts import (
+    DependencyRelationship,
+    FieldContract,
+    SemanticType,
+)
+from app.smart_data.generator import generate_field
+from app.smart_data.placeholders import PlaceholderKind, build_placeholder, parse_placeholder
+
 from app.main import (
     csrf_token,
     csrf_valid,
@@ -363,75 +371,48 @@ def smart_schema(endpoint) -> dict:
     )
 
 
-def synthetic_value(
-    name: str,
-    value_type: str = "",
-):
-    lower = name.lower()
-    type_lower = value_type.lower()
-
-    if lower in {
-        "product_name",
-        "name",
-        "title",
-    }:
-        return "QAFox Synthetic Test Product"
-
-    if lower == "short_name":
-        return "QAFox Test"
-
-    if lower == "slug":
-        return "qafox-synthetic-test-product"
-
-    if lower == "sku":
-        return "QAF-TEST-001"
-
-    if lower == "barcode":
-        return "8900000000001"
-
-    if lower in {
-        "mrp",
-        "price",
-    }:
-        return "100.00"
-
-    if lower == "selling_price":
-        return "90.00"
-
-    if lower == "cost_price":
-        return "70.00"
-
-    if lower == "gst_percentage":
-        return "18.00"
-
-    if lower in {
-        "opening_stock",
-        "min_stock",
-    }:
-        return "0"
-
-    if lower == "max_stock":
-        return "10"
-
-    if lower == "category_id":
-        return "{{REQUIRED_CATEGORY_ID}}"
-
-    if lower.endswith("_id"):
-        return "{{REQUIRED_" + lower.upper() + "}}"
-
-    if lower == "email":
-        return "{{SECRET_TEST_EMAIL}}"
-
-    if lower == "password":
-        return "{{SECRET_TEST_PASSWORD}}"
-
-    if "bool" in type_lower or lower.startswith("is_"):
-        return "true"
-
-    if "int" in type_lower:
-        return "1"
-
-    return "QAFox synthetic value"
+def field_contract(field: dict) -> FieldContract:
+    name = str(field.get("name", "")).strip()
+    semantic_raw = str(field.get("semantic_type", "unknown"))
+    try:
+        semantic = SemanticType(semantic_raw)
+    except ValueError:
+        semantic = SemanticType.UNKNOWN
+    dependency = None
+    dependency_raw = field.get("dependency")
+    if isinstance(dependency_raw, dict):
+        dependency = DependencyRelationship(
+            str(dependency_raw.get("resource", name.removesuffix("_id"))),
+            str(dependency_raw.get("field", "id")),
+            confidence_score=int(dependency_raw.get("confidence_score", 70)),
+        )
+    children = tuple(
+        field_contract(item)
+        for item in field.get("children", [])
+        if isinstance(item, dict)
+    )
+    enum_values = field.get("enum_values", field.get("enum", []))
+    return FieldContract(
+        name=name,
+        semantic_type=semantic,
+        data_type=str(field.get("data_type", field.get("type", "unknown"))),
+        required=bool(field.get("required", False)),
+        default_value=field.get("default_value", field.get("default")),
+        minimum=field.get("minimum"),
+        maximum=field.get("maximum"),
+        min_length=field.get("min_length", field.get("minLength")),
+        max_length=field.get("max_length", field.get("maxLength")),
+        pattern=str(field.get("pattern", "")),
+        format=str(field.get("format", "")),
+        enum_values=tuple(enum_values) if isinstance(enum_values, list) else (),
+        nullable=bool(field.get("nullable", False)),
+        secret=bool(field.get("secret", False)),
+        dependency=dependency,
+        confidence_score=int(field.get("confidence_score", 0)),
+        source_file=str(field.get("source_file", "")),
+        source_line=field.get("source_line"),
+        children=children,
+    )
 
 
 def enrich_with_smart_test_data(
@@ -449,6 +430,7 @@ def enrich_with_smart_test_data(
         fields = []
 
     synthetic_data = {}
+    generation_details = {}
 
     for field in fields:
         if not isinstance(field, dict):
@@ -461,10 +443,19 @@ def enrich_with_smart_test_data(
         if not name:
             continue
 
-        synthetic_data[name] = synthetic_value(
-            name,
-            str(field.get("type", "")),
+        result = generate_field(
+            field_contract(field),
+            "request",
         )
+        synthetic_data[name] = result.value
+        generation_details[name] = {
+            "semantic_type": result.semantic_type.value,
+            "strategy": result.strategy,
+            "reason": result.reason,
+            "confidence_score": result.confidence_score,
+            "status": result.status,
+            "editable": result.editable,
+        }
 
     authentication = str(
         endpoint.get(
@@ -532,10 +523,9 @@ def enrich_with_smart_test_data(
 
         if positive:
             for parameter in path_parameters:
-                marker = (
-                    "{{REQUIRED_"
-                    + parameter.upper()
-                    + "}}"
+                marker = build_placeholder(
+                    PlaceholderKind.REQUIRED,
+                    "resource." + parameter,
                 )
 
                 case["endpoint_path"] = re.sub(
@@ -581,31 +571,41 @@ def enrich_with_smart_test_data(
             )
 
         for name, value in synthetic_data.items():
-            if (
-                isinstance(value, str)
-                and value.startswith(
-                    "{{REQUIRED_"
-                )
-            ):
+            placeholder = (
+                parse_placeholder(value)
+                if isinstance(value, str)
+                else None
+            )
+            if placeholder and placeholder.blocks_approval:
                 prerequisites.append(
                     {
                         "name": name,
                         "status": "required",
-                        "reason": (
-                            "Source model or form requires "
-                            "a related existing record."
-                        ),
+                        "reason": generation_details[name]["reason"],
                     }
                 )
 
-        case["data_status"] = (
-            "prerequisite-required"
-            if prerequisites
-            else "ready"
-        )
+        generation_statuses = {
+            item["status"]
+            for item in generation_details.values()
+        }
+        if "secret-reference-required" in generation_statuses:
+            case["data_status"] = "secret-reference-required"
+        elif prerequisites:
+            case["data_status"] = "prerequisite-required"
+        elif "review-recommended" in generation_statuses:
+            case["data_status"] = "review-recommended"
+        else:
+            case["data_status"] = "ready"
 
         case["prerequisites"] = prerequisites
         case["evidence"] = case_evidence
+        case["evidence"].append(
+            {
+                "type": "semantic-generation",
+                "fields": generation_details,
+            }
+        )
         case["synthetic_data"] = (
             synthetic_data
             if positive
