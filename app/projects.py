@@ -556,6 +556,55 @@ def project_for_owner(
     )
 
 
+def owned_storage_directory(
+    owner_user_id: int,
+    public_id: str,
+    storage_directory: str | None,
+) -> Path | None:
+    expected = (
+        PROJECT_ROOT / str(owner_user_id) / public_id
+    ).resolve()
+
+    try:
+        expected.relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        return None
+
+    if storage_directory:
+        actual = Path(storage_directory).resolve()
+        if actual != expected:
+            return None
+
+    return expected
+
+
+def remove_owned_project_files(
+    owner_user_id: int,
+    public_id: str,
+    storage_directory: str | None,
+) -> None:
+    project_directory = owned_storage_directory(
+        owner_user_id,
+        public_id,
+        storage_directory,
+    )
+
+    if project_directory and project_directory.is_dir():
+        shutil.rmtree(project_directory, ignore_errors=True)
+
+    staging_directory = (
+        STAGING_ROOT / str(owner_user_id) / public_id
+    ).resolve()
+
+    try:
+        staging_directory.relative_to(STAGING_ROOT.resolve())
+    except ValueError:
+        return
+
+    if staging_directory.is_dir():
+        shutil.rmtree(staging_directory, ignore_errors=True)
+
+
 def status_badge(status: str) -> str:
     css_class = (
         "ready"
@@ -635,9 +684,15 @@ def project_list(
                     </span>
                 </div>
 
-                <a href="/projects/{esc(project["public_id"])}">
-                    Open private project →
-                </a>
+                <div class="project-card-actions">
+                    <a href="/projects/{esc(project["public_id"])}">
+                        Open private project →
+                    </a>
+                    <a class="project-delete-link"
+                       href="/projects/{esc(project["public_id"])}/delete">
+                        Delete
+                    </a>
+                </div>
             </article>
             """
             for project in projects
@@ -1203,7 +1258,13 @@ def project_detail(
             <p>{esc(project["description"] or "No description")}</p>
         </div>
 
-        {status_badge(project["status"])}
+        <div class="project-detail-actions">
+            {status_badge(project["status"])}
+            <a class="project-delete-link"
+               href="/projects/{esc(public_id)}/delete">
+                Delete project
+            </a>
+        </div>
     </div>
 
     <div class="project-privacy-banner">
@@ -1320,6 +1381,197 @@ def project_detail(
         content,
         request,
         public=False,
+    )
+
+
+@router.get("/projects/{public_id}/delete")
+def delete_project_page(
+    request: Request,
+    public_id: str,
+    message: str = "",
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+    except ValueError:
+        return RedirectResponse(
+            "/projects",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = project_for_owner(
+            db,
+            user.id,
+            public_id,
+        )
+
+    if not project:
+        return RedirectResponse(
+            "/projects?"
+            "message=Project+was+not+found+in+your+workspace.",
+            status_code=303,
+        )
+
+    csrf = csrf_token(request)
+    notice = (
+        f'<div class="message error">{esc(message)}</div>'
+        if message
+        else ""
+    )
+
+    content = f"""
+<section class="simple-card project-delete-shell">
+    <a href="/projects/{esc(public_id)}">← Cancel</a>
+    <span>DELETE PRIVATE PROJECT</span>
+    <h1>Delete {esc(project["name"])}?</h1>
+    {notice}
+    <p>
+        This removes the project from your workspace and deletes
+        the uploaded files for this project only. Other accounts
+        are not affected. This cannot be undone from the app.
+    </p>
+    <p>
+        File: {esc(project["original_filename"])}
+    </p>
+    <form method="post"
+          action="/projects/{esc(public_id)}/delete">
+        <input type="hidden" name="csrf" value="{esc(csrf)}">
+        <button class="project-delete-button" type="submit">
+            Delete project
+        </button>
+        <a class="outline-dark-button" href="/projects/{esc(public_id)}">
+            Keep project
+        </a>
+    </form>
+</section>
+"""
+
+    return layout(
+        "Delete project",
+        content,
+        request,
+        public=False,
+    )
+
+
+@router.post("/projects/{public_id}/delete")
+def delete_project(
+    request: Request,
+    public_id: str,
+    csrf: str = Form(...),
+):
+    user = current_user(request)
+
+    if not user:
+        return RedirectResponse(
+            "/login",
+            status_code=303,
+        )
+
+    if not csrf_valid(request, csrf):
+        return RedirectResponse(
+            f"/projects/{public_id}/delete"
+            "?message=Your+session+expired.+Please+try+again.",
+            status_code=303,
+        )
+
+    try:
+        uuid.UUID(public_id)
+    except ValueError:
+        return RedirectResponse(
+            "/projects",
+            status_code=303,
+        )
+
+    with Session(engine) as db:
+        project = project_for_owner(
+            db,
+            user.id,
+            public_id,
+        )
+
+        if not project:
+            return RedirectResponse(
+                "/projects?"
+                "message=Project+was+not+found+in+your+workspace.",
+                status_code=303,
+            )
+
+        db.execute(
+            text(
+                """
+                INSERT INTO project_audit_events (
+                    project_id,
+                    owner_user_id,
+                    event_type,
+                    event_summary,
+                    created_at
+                )
+                VALUES (
+                    :project_id,
+                    :owner_user_id,
+                    'project-deleted',
+                    :summary,
+                    :created_at
+                )
+                """
+            ),
+            {
+                "project_id": project["id"],
+                "owner_user_id": user.id,
+                "summary": (
+                    f"Deleted private project {project['name']}."
+                ),
+                "created_at": utc_now(),
+            },
+        )
+
+        deleted = db.execute(
+            text(
+                """
+                UPDATE projects
+                SET deleted_at = :deleted_at,
+                    updated_at = :updated_at
+                WHERE id = :project_id
+                  AND owner_user_id = :owner_user_id
+                  AND deleted_at IS NULL
+                """
+            ),
+            {
+                "deleted_at": utc_now(),
+                "updated_at": utc_now(),
+                "project_id": project["id"],
+                "owner_user_id": user.id,
+            },
+        )
+
+        if deleted.rowcount != 1:
+            db.rollback()
+            return RedirectResponse(
+                "/projects?"
+                "message=Project+was+not+found+in+your+workspace.",
+                status_code=303,
+            )
+
+        db.commit()
+
+    remove_owned_project_files(
+        user.id,
+        public_id,
+        project["storage_directory"],
+    )
+
+    return RedirectResponse(
+        "/projects?message=Private+project+deleted.",
+        status_code=303,
     )
 
 

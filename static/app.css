@@ -1795,10 +1795,50 @@ footer a small {
     font-weight: 800;
 }
 
-.project-card > a {
+.project-card > a,
+.project-card-actions a {
     color: var(--violet);
     font-size: 10px;
     font-weight: 850;
+}
+
+.project-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.project-delete-link {
+    color: var(--coral) !important;
+}
+
+.project-delete-button {
+    min-height: 44px;
+    padding: 0 18px;
+    margin-right: 10px;
+    border: 0;
+    border-radius: 11px;
+    background: var(--coral);
+    color: white;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 800;
+}
+
+.project-delete-shell form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.project-detail-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
 }
 
 .project-empty {

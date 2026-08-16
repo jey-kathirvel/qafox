@@ -43,4 +43,4 @@ class MobilePwaShellTests(TestCase):
         self.assertIn("beforeinstallprompt", js)
         self.assertIn("data-pwa-install", js)
         self.assertIn("aria-expanded", js)
-        self.assertIn("qafox-shell-v7", worker)
+        self.assertIn("qafox-shell-v8", worker)
