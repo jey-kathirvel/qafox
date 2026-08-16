@@ -2,6 +2,7 @@
   "use strict";
 
   const toggle = document.getElementById("qafox-nav-toggle");
+  const closeButton = document.getElementById("qafox-nav-close");
   const nav = document.getElementById("qafox-site-nav");
   const backdrop = document.getElementById("qafox-nav-backdrop");
   const label = toggle && toggle.querySelector(".visually-hidden");
@@ -23,6 +24,10 @@
   toggle.addEventListener("click", () => {
     setOpen(!nav.classList.contains("is-open"));
   });
+
+  if (closeButton) {
+    closeButton.addEventListener("click", () => setOpen(false));
+  }
 
   backdrop.addEventListener("click", () => setOpen(false));
 
@@ -61,6 +66,81 @@
       );
     }
   });
+})();
+
+(() => {
+  "use strict";
+
+  const buttons = document.querySelectorAll("[data-pwa-install]");
+  const hint = document.getElementById("qafox-pwa-hint");
+  const hintClose = document.getElementById("qafox-pwa-hint-close");
+
+  if (!buttons.length) {
+    return;
+  }
+
+  const standalone = (
+    window.matchMedia("(display-mode: standalone)").matches
+    || window.navigator.standalone === true
+  );
+
+  if (standalone) {
+    return;
+  }
+
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const compact = window.matchMedia("(max-width: 860px)").matches;
+  let deferredPrompt = null;
+
+  const showInstall = () => {
+    buttons.forEach((button) => {
+      button.hidden = false;
+    });
+  };
+
+  if (ios || compact) {
+    showInstall();
+  }
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredPrompt = event;
+    showInstall();
+  });
+
+  window.addEventListener("appinstalled", () => {
+    deferredPrompt = null;
+    buttons.forEach((button) => {
+      button.hidden = true;
+    });
+    if (hint) {
+      hint.hidden = true;
+    }
+  });
+
+  buttons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        buttons.forEach((item) => {
+          item.hidden = true;
+        });
+        return;
+      }
+
+      if (hint) {
+        hint.hidden = false;
+      }
+    });
+  });
+
+  if (hintClose && hint) {
+    hintClose.addEventListener("click", () => {
+      hint.hidden = true;
+    });
+  }
 })();
 
 (() => {

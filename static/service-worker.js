@@ -1,4 +1,4 @@
-const CACHE_NAME = "qafox-shell-v6";
+const CACHE_NAME = "qafox-shell-v7";
 
 const APP_SHELL = [
   "/",

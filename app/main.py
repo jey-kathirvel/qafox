@@ -325,10 +325,31 @@ def layout(
     <nav id="qafox-site-nav"
          class="site-nav"
          aria-label="Main">
+        <div class="site-nav-drawer-head">
+            <strong>Menu</strong>
+            <button type="button"
+                    class="nav-close"
+                    id="qafox-nav-close"
+                    aria-label="Close menu">
+                ×
+            </button>
+        </div>
         {nav_links}
+        <button type="button"
+                class="pwa-install-button site-nav-install"
+                data-pwa-install
+                hidden>
+            Install App
+        </button>
     </nav>
     <div class="topbar-end">
         {account}
+        <button type="button"
+                class="pwa-install-button"
+                data-pwa-install
+                hidden>
+            Install App
+        </button>
         <button type="button"
                 class="nav-toggle"
                 id="qafox-nav-toggle"
@@ -342,6 +363,18 @@ def layout(
 <div class="nav-backdrop"
      id="qafox-nav-backdrop"
      hidden></div>
+<div class="pwa-install-hint"
+     id="qafox-pwa-hint"
+     hidden>
+    <strong>Install QAFox</strong>
+    <p>
+        iPhone: tap Share, then Add to Home Screen.
+        Chrome or Edge: open the browser menu and choose Install app.
+    </p>
+    <button type="button" id="qafox-pwa-hint-close">
+        Got it
+    </button>
+</div>
 <main class="{'public-main' if public else 'dashboard-main'}">
 {content}
 </main>
