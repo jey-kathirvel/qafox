@@ -19,7 +19,7 @@ class MobilePwaShellTests(TestCase):
         self.assertIn("apple-mobile-web-app-capable", source)
         self.assertIn("viewport-fit=cover", source)
         self.assertIn('("/dashboard", "Dashboard")', source)
-        self.assertIn('("/signup", "Create workspace")', source)
+        self.assertIn('class="theme-platinum-mist"', source)
 
     def test_manifest_is_installable(self):
         manifest = loads(
@@ -43,4 +43,6 @@ class MobilePwaShellTests(TestCase):
         self.assertIn("beforeinstallprompt", js)
         self.assertIn("data-pwa-install", js)
         self.assertIn("aria-expanded", js)
-        self.assertIn("qafox-shell-v8", worker)
+        self.assertIn("qafox-shell-v9", worker)
+        self.assertIn("theme-platinum-mist", css)
+        self.assertIn("--glass:", css)

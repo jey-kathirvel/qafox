@@ -293,7 +293,7 @@ def layout(
 <title>{esc(title)} · QAFox</title>
 <meta name="description"
       content="Private quality engineering workspace">
-<meta name="theme-color" content="#281463">
+<meta name="theme-color" content="#efe8de">
 <meta name="application-name" content="QAFox">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -316,7 +316,7 @@ def layout(
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body class="theme-platinum-mist">
 <header class="topbar">
     <a class="brand" href="{esc(home_href)}">
         <span class="fox-logo">🦊</span>
