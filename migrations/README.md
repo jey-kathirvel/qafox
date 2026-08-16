@@ -57,3 +57,7 @@ This patch does not consume execution plans or backfill inventory.
 ## PATCH-QAFOX-004B1A-8
 
 Runtime orchestration is stored inside the immutable execution-plan JSON (`orchestration`). It does not rewrite historical plans, runs, or results. No additional tables are required. Existing v1 plans continue to execute as independent requests.
+
+## PATCH-QAFOX-004B1A-9
+
+Contract, schema, security, and performance assertions are stored inside immutable case snapshots. No additional tables are required. Historical plans without an `assertions` list receive default status, security, and duration checks at runtime.

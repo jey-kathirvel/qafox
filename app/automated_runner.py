@@ -27,6 +27,10 @@ from app.main import (
 )
 
 from app.test_configuration import decrypt_json
+from app.smart_data.assertions import (
+    default_assertions,
+    evaluate_assertions,
+)
 from app.smart_data.orchestration import (
     RuntimeStore,
     extract_runtime_value,
@@ -1209,36 +1213,32 @@ def execute_run(run_id: int):
                     )
                 )
 
-                passed = status_matches(
-                    response["status_code"],
-                    snapshot.get(
-                        "expected_status_codes",
-                        "",
-                    ),
-                )
-
-                status = (
-                    "passed"
-                    if passed
-                    else "failed"
-                )
-
-                assertion = (
-                    "Actual status matched expected status."
-                    if passed
-                    else (
-                        f"Expected "
-                        f"{snapshot.get('expected_status_codes', '')}; "
-                        f"received {response['status_code']}."
-                    )
-                )
-
                 if 300 <= response["status_code"] < 400:
                     status = "failed"
                     assertion = (
                         "Redirect response was blocked and "
                         "was not followed."
                     )
+                else:
+                    specs = snapshot.get("assertions") or default_assertions(
+                        case_type=str(snapshot.get("case_type") or ""),
+                        expected_status_codes=str(
+                            snapshot.get("expected_status_codes") or ""
+                        ),
+                    )
+                    passed, assertion, _outcomes = evaluate_assertions(
+                        specs,
+                        status_code=response["status_code"],
+                        body=raw_body,
+                        headers=response["headers"],
+                        duration_ms=duration_ms,
+                        secret_values=secret_values,
+                        timeout_ms=timeout * 1000,
+                        expected_status_codes=str(
+                            snapshot.get("expected_status_codes") or ""
+                        ),
+                    )
+                    status = "passed" if passed else "failed"
 
                 store_result(
                     db,

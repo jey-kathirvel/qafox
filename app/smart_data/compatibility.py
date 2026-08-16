@@ -198,6 +198,22 @@ def inventory_item_from_route(route: RouteContract) -> dict[str, Any]:
             {
                 "content_type": content_type,
                 "fields": fields,
+                "responses": {
+                    str(status): {
+                        "name": schema.name,
+                        "content_type": schema.content_type,
+                        "fields": [
+                            {
+                                "name": item.name,
+                                "data_type": item.data_type,
+                                "required": item.required,
+                                "semantic_type": item.semantic_type.value,
+                            }
+                            for item in schema.fields
+                        ],
+                    }
+                    for status, schema in (route.response_schemas or {}).items()
+                },
                 "source": "adapter",
                 "adapter": route.framework,
             },

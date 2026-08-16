@@ -8,6 +8,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.smart_data.assertions import (
+    ASSERTION_VERSION,
+    default_assertions,
+    success_response_fields,
+)
 from app.smart_data.contracts import (
     DependencyRelationship,
     FieldContract,
@@ -646,6 +651,21 @@ def enrich_with_smart_test_data(
         )
 
         apply_placeholder_safety(case)
+        specs = default_assertions(
+            case_type=case["case_type"],
+            expected_status_codes=case["expected_status_codes"],
+            response_fields=success_response_fields(schema)
+            if case["case_type"] == "positive"
+            else (),
+        )
+        case["assertions"] = specs
+        case["evidence"].append(
+            {
+                "type": "assertions",
+                "version": ASSERTION_VERSION,
+                "specs": specs,
+            }
+        )
 
     return cases
 

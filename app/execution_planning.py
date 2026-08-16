@@ -9,6 +9,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.smart_data.assertions import (
+    assertions_from_evidence,
+    default_assertions,
+    sanitize_assertion_specs,
+)
 from app.smart_data.orchestration import (
     apply_orchestration_to_snapshot,
     build_orchestration,
@@ -220,6 +225,18 @@ def unresolved_test_data(case) -> tuple[str, ...]:
 
 def case_snapshot(case, decision: str):
     payload = case_request_payload(case)
+    evidence = case.get("evidence")
+    if not isinstance(evidence, list):
+        evidence = safe_json(case.get("evidence_json"), [])
+    assertions = case.get("assertions")
+    if not isinstance(assertions, list) or not assertions:
+        assertions = assertions_from_evidence(
+            evidence,
+            default_assertions(
+                case_type=str(case.get("case_type") or ""),
+                expected_status_codes=str(case.get("expected_status_codes") or ""),
+            ),
+        )
     return {
         "test_case_public_id": case["public_id"],
         "title": case["title"],
@@ -241,6 +258,7 @@ def case_snapshot(case, decision: str):
             bool(case["requires_approval"]),
         "destructive": is_destructive(case),
         "decision": decision,
+        "assertions": sanitize_assertion_specs(assertions),
     }
 
 

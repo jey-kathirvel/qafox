@@ -133,7 +133,7 @@ Never commit `.env`, encryption keys, SMTP credentials, uploaded projects, datab
 
 Apply the repository's current schema or migration procedure using a least-privileged PostgreSQL role.
 
-The first numbered patch is `PATCH-QAFOX-004B1A-6` (smart-data contract persistence). Live discovery compatibility is `PATCH-QAFOX-004B1A-7`. Runtime orchestration is `PATCH-QAFOX-004B1A-8`: approved plans may snapshot dependency bindings, resolve canonical `{{DYNAMIC:...}}` values from bounded JSON/header extraction, skip dependents when a producer fails, and optionally DELETE only resources created in that same run after a separate cleanup approval. See `migrations/README.md` for backup, forward, rollback, and historical-count commands. Do not apply 004B1A-6 as a rewrite of existing API, plan, run, or result tables.
+The first numbered patch is `PATCH-QAFOX-004B1A-6` (smart-data contract persistence). Live discovery compatibility is `PATCH-QAFOX-004B1A-7`. Runtime orchestration is `PATCH-QAFOX-004B1A-8`. Response assertions are `PATCH-QAFOX-004B1A-9`: plans snapshot status, schema-field, secret/stack-trace, and duration checks; the runner evaluates them after each hardened HTTPS call. See `migrations/README.md` for backup, forward, rollback, and historical-count commands. Do not apply 004B1A-6 as a rewrite of existing API, plan, run, or result tables.
 
 ### 5. Run locally
 
