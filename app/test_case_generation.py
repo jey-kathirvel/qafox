@@ -14,7 +14,14 @@ from app.smart_data.contracts import (
     SemanticType,
 )
 from app.smart_data.generator import generate_field
-from app.smart_data.placeholders import PlaceholderKind, build_placeholder, parse_placeholder
+from app.smart_data.placeholders import (
+    PlaceholderKind,
+    apply_placeholder_safety,
+    approval_blockers,
+    build_placeholder,
+    parse_placeholder,
+    request_payload as case_request_payload,
+)
 
 from app.main import (
     csrf_token,
@@ -637,6 +644,8 @@ def enrich_with_smart_test_data(
             "Qubi source-aware route, schema, validation "
             "and form intelligence"
         )
+
+        apply_placeholder_safety(case)
 
     return cases
 
@@ -1689,6 +1698,31 @@ def update_test_case(
                     "Expected status codes are invalid."
                 )
 
+            draft = {
+                "endpoint_path": endpoint_path.strip(),
+                "request_headers": json.dumps(
+                    parsed_headers,
+                    ensure_ascii=False,
+                ),
+                "request_query": json.dumps(
+                    parsed_query,
+                    ensure_ascii=False,
+                ),
+                "request_body": (
+                    json.dumps(
+                        parsed_body,
+                        ensure_ascii=False,
+                    )
+                    if parsed_body is not None
+                    else None
+                ),
+            }
+            unresolved = approval_blockers(
+                case_request_payload(draft)
+            )
+            method = str(case["http_method"]).upper()
+            safe = method in SAFE_METHODS and not unresolved
+
         except (
             ValueError,
             json.JSONDecodeError,
@@ -1735,6 +1769,8 @@ def update_test_case(
                     expected_behavior =
                         :expected_behavior,
                     is_enabled = :is_enabled,
+                    safe_to_execute = :safe_to_execute,
+                    requires_approval = :requires_approval,
                     updated_at = :updated_at
                 WHERE id = :id
                   AND project_id = :project_id
@@ -1767,6 +1803,8 @@ def update_test_case(
                 "expected_behavior":
                     expected_behavior.strip(),
                 "is_enabled": bool(is_enabled),
+                "safe_to_execute": safe,
+                "requires_approval": not safe,
                 "updated_at": utc_now(),
                 "id": case["id"],
                 "project_id": project["id"],

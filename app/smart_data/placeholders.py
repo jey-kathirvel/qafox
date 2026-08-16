@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -129,3 +130,44 @@ def approval_blockers(value: Any) -> tuple[str, ...]:
 
     visit(value)
     return tuple(dict.fromkeys(blockers))
+
+
+def _json_value(raw: Any, fallback: Any) -> Any:
+    if isinstance(raw, (dict, list)) or raw is None:
+        return raw if raw is not None else fallback
+    if not isinstance(raw, str) or not raw.strip():
+        return fallback
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+
+
+def request_payload(case: Mapping[str, Any] | None) -> dict[str, Any]:
+    case = case or {}
+    body_raw = case.get("request_body")
+    if isinstance(body_raw, str) and body_raw.strip():
+        body = _json_value(body_raw, body_raw)
+    else:
+        body = body_raw
+    return {
+        "path": case.get("endpoint_path") or "",
+        "headers": _json_value(case.get("request_headers"), {}),
+        "query": _json_value(case.get("request_query"), {}),
+        "body": body,
+    }
+
+
+def apply_placeholder_safety(
+    case: dict[str, Any],
+    *,
+    safe_methods: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"}),
+) -> dict[str, Any]:
+    """Read-only cases with mandatory placeholders cannot auto-join a plan."""
+    if approval_blockers(request_payload(case)):
+        case["safe_to_execute"] = False
+        case["requires_approval"] = True
+    elif str(case.get("http_method", "")).upper() in safe_methods:
+        case["safe_to_execute"] = True
+        case["requires_approval"] = False
+    return case

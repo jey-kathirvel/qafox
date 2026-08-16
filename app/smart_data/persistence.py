@@ -226,6 +226,7 @@ def persist_contracts(
         owner_user_id=owner_user_id,
         project_id=project_id,
         public_id=public_id,
+        discovery_run_id=discovery_run_id,
     )
     if loaded is None:
         raise PersistenceIsolationError("Persisted snapshot is not visible to the owner")
@@ -705,26 +706,32 @@ def load_snapshot(
 ) -> PersistedSnapshot | None:
     if not public_id and discovery_run_id is None:
         raise ValueError("A snapshot public ID or discovery run is required")
+    # Bind only the identifiers that are present. PostgreSQL/psycopg cannot
+    # infer a type for `NULL IS NOT NULL` placeholders, which aborted live
+    # discovery after adapter persistence.
+    identity_sql = []
+    params: dict[str, Any] = {
+        "owner_user_id": owner_user_id,
+        "project_id": project_id,
+    }
+    if public_id:
+        identity_sql.append("public_id = :public_id")
+        params["public_id"] = public_id
+    if discovery_run_id is not None:
+        identity_sql.append("discovery_run_id = :discovery_run_id")
+        params["discovery_run_id"] = int(discovery_run_id)
     row = session.execute(
         text(
-            """
+            f"""
             SELECT *
             FROM smart_data_snapshots
             WHERE owner_user_id = :owner_user_id
               AND project_id = :project_id
-              AND (
-                    (:public_id IS NOT NULL AND public_id = :public_id)
-                 OR (:discovery_run_id IS NOT NULL AND discovery_run_id = :discovery_run_id)
-              )
+              AND ({' OR '.join(identity_sql)})
             LIMIT 1
             """
         ),
-        {
-            "owner_user_id": owner_user_id,
-            "project_id": project_id,
-            "public_id": public_id,
-            "discovery_run_id": discovery_run_id,
-        },
+        params,
     ).mappings().first()
     if row is None:
         return None

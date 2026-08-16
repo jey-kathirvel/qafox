@@ -18,12 +18,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.smart_data.compatibility import (
+    AdapterCollection,
+    ComparisonReport,
     collect_adapter_contracts,
     inventory_item_from_route,
     merge_legacy_and_adapter,
 )
 from app.smart_data.contracts import ProjectRef
-from app.smart_data.persistence import persist_contracts
+from app.smart_data.persistence import PersistenceIsolationError, persist_contracts
 from app.smart_data.serialization import UnsafeSecretError
 
 from app.main import (
@@ -1158,27 +1160,54 @@ def latest_run(
     db: Session,
     owner_user_id: int,
     project_id: int,
+    *,
+    status: str | None = None,
 ):
+    conditions = [
+        "project_id = :project_id",
+        "owner_user_id = :owner_user_id",
+    ]
+    parameters = {
+        "project_id": project_id,
+        "owner_user_id": owner_user_id,
+    }
+    if status:
+        conditions.append("status = :status")
+        parameters["status"] = status
     return (
         db.execute(
             text(
-                """
+                f"""
                 SELECT *
                 FROM api_discovery_runs
-                WHERE project_id = :project_id
-                  AND owner_user_id = :owner_user_id
+                WHERE {' AND '.join(conditions)}
                 ORDER BY started_at DESC
                 LIMIT 1
                 """
             ),
-            {
-                "project_id": project_id,
-                "owner_user_id": owner_user_id,
-            },
+            parameters,
         )
         .mappings()
         .first()
     )
+
+
+def inventory_display_run(
+    db: Session,
+    owner_user_id: int,
+    project_id: int,
+):
+    latest = latest_run(db, owner_user_id, project_id)
+    if latest and str(latest["status"]) == "failed":
+        completed = latest_run(
+            db,
+            owner_user_id,
+            project_id,
+            status="completed",
+        )
+        if completed:
+            return latest, completed
+    return latest, latest
 
 
 @router.post("/projects/{public_id}/api-discovery")
@@ -1286,18 +1315,25 @@ def run_api_discovery(
                 owner_user_id=user.id,
                 project_public_id=public_id,
             )
-            adapter_collection = collect_adapter_contracts(
-                project_ref
-            )
-            adapter_items = [
-                inventory_item_from_route(route)
-                for route in adapter_collection.routes
-            ]
-            endpoints, comparison = merge_legacy_and_adapter(
-                discovery["endpoints"],
-                adapter_items,
-                adapter_collection.detections,
-            )
+            try:
+                adapter_collection = collect_adapter_contracts(
+                    project_ref
+                )
+                adapter_items = [
+                    inventory_item_from_route(route)
+                    for route in adapter_collection.routes
+                ]
+                endpoints, comparison = merge_legacy_and_adapter(
+                    discovery["endpoints"],
+                    adapter_items,
+                    adapter_collection.detections,
+                )
+            except Exception:
+                adapter_collection = AdapterCollection()
+                endpoints = list(discovery["endpoints"])
+                comparison = ComparisonReport(
+                    legacy_only=len(endpoints),
+                )
             frameworks = Counter(
                 item["framework"]
                 for item in endpoints
@@ -1408,22 +1444,32 @@ def run_api_discovery(
                     },
                 )
 
+            persist_note = ""
             try:
-                persist_contracts(
-                    db,
-                    owner_user_id=user.id,
-                    project_id=project["id"],
-                    discovery_run_id=int(run_id),
-                    routes=adapter_collection.routes,
-                    fixtures=adapter_collection.fixtures,
-                    adapter_names=tuple(
-                        detection.framework
-                        for detection in adapter_collection.detections
-                        if detection.detected
-                    ),
+                with db.begin_nested():
+                    persist_contracts(
+                        db,
+                        owner_user_id=user.id,
+                        project_id=project["id"],
+                        discovery_run_id=int(run_id),
+                        routes=adapter_collection.routes,
+                        fixtures=adapter_collection.fixtures,
+                        adapter_names=tuple(
+                            detection.framework
+                            for detection in adapter_collection.detections
+                            if detection.detected
+                        ),
+                    )
+            except (
+                SQLAlchemyError,
+                UnsafeSecretError,
+                PersistenceIsolationError,
+                ValueError,
+            ):
+                persist_note = (
+                    " Adapter contracts were not persisted; "
+                    "legacy inventory was still saved."
                 )
-            except (SQLAlchemyError, UnsafeSecretError):
-                pass
 
             duplicate_count = sum(
                 1
@@ -1441,7 +1487,7 @@ def run_api_discovery(
                 for name, count in frameworks.most_common()
             ) or "No supported framework detected"
             framework_summary = (
-                f"{framework_summary}. {comparison.summary()}"
+                f"{framework_summary}. {comparison.summary()}{persist_note}"
             )
 
             completed_at = utc_now()
@@ -1509,7 +1555,7 @@ def run_api_discovery(
 
             db.commit()
 
-        except Exception:
+        except Exception as exc:
             db.rollback()
 
             db.execute(
@@ -1526,7 +1572,8 @@ def run_api_discovery(
                 ),
                 {
                     "error_message": (
-                        "Discovery could not be completed."
+                        "Discovery could not be completed "
+                        f"({type(exc).__name__})."
                     ),
                     "completed_at": utc_now(),
                     "run_id": run_id,
@@ -1578,7 +1625,7 @@ def api_inventory_page(
                 status_code=303,
             )
 
-        run = latest_run(
+        attempt, run = inventory_display_run(
             db,
             user.id,
             project["id"],
@@ -1732,6 +1779,15 @@ def api_inventory_page(
         """
 
     csrf = csrf_token(request)
+    failed_notice = ""
+    if attempt is not None and str(attempt["status"]) == "failed":
+        failed_notice = f"""
+        <div class="case-notice error">
+            The latest discovery attempt did not finish
+            ({esc(attempt["error_message"] or "unknown error")}).
+            Showing the last completed inventory. Run again after the fix.
+        </div>
+        """
 
     content = f"""
 <section class="inventory-shell">
@@ -1742,6 +1798,7 @@ def api_inventory_page(
             </a>
             <span>API DISCOVERY</span>
             <h1>API inventory</h1>
+            {failed_notice}
             <p>{esc(run["framework_summary"] or "")}</p>
         </div>
 
@@ -1886,11 +1943,11 @@ def inventory_export_data(
         if not project:
             return None, []
 
-        run = latest_run(
+        run = inventory_display_run(
             db,
             user_id,
             project["id"],
-        )
+        )[1]
 
         if not run:
             return project, []

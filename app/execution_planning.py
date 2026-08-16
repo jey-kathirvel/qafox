@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.smart_data.placeholders import approval_blockers
+from app.smart_data.placeholders import approval_blockers, request_payload
 
 from app.main import (
     csrf_token,
@@ -205,7 +205,16 @@ def safe_json(raw, fallback):
         return fallback
 
 
+def case_request_payload(case):
+    return request_payload(case)
+
+
+def unresolved_test_data(case) -> tuple[str, ...]:
+    return approval_blockers(request_payload(case))
+
+
 def case_snapshot(case, decision: str):
+    payload = case_request_payload(case)
     return {
         "test_case_public_id": case["public_id"],
         "title": case["title"],
@@ -213,18 +222,9 @@ def case_snapshot(case, decision: str):
         "case_type": case["case_type"],
         "http_method": case["http_method"],
         "endpoint_path": case["endpoint_path"],
-        "request_headers": safe_json(
-            case["request_headers"],
-            {},
-        ),
-        "request_query": safe_json(
-            case["request_query"],
-            {},
-        ),
-        "request_body": safe_json(
-            case["request_body"],
-            None,
-        ),
+        "request_headers": payload["headers"],
+        "request_query": payload["query"],
+        "request_body": payload["body"],
         "expected_status_codes":
             case["expected_status_codes"],
         "expected_behavior":
@@ -281,10 +281,12 @@ def approval_page(
 
     safe_rows = ""
     approval_rows = ""
+    data_rows = ""
     destructive_count = 0
 
     for case in cases:
         destructive = is_destructive(case)
+        blockers = unresolved_test_data(case)
 
         if destructive:
             destructive_count += 1
@@ -293,7 +295,34 @@ def approval_page(
             str(case["http_method"]).lower()
         )
 
-        if case["safe_to_execute"]:
+        if blockers:
+            blocker_text = ", ".join(blockers[:4])
+            data_rows += f"""
+            <article class="approval-case approval-required-case">
+                <div>
+                    <span class="method-badge method-{esc(method_class)}">
+                        {esc(case["http_method"])}
+                    </span>
+                </div>
+                <div>
+                    <strong>{esc(case["title"])}</strong>
+                    <code>{esc(case["endpoint_path"])}</code>
+                    <small>
+                        Replace mandatory placeholders before this case can
+                        join a plan: {esc(blocker_text)}
+                    </small>
+                    <p>
+                        <a href="/projects/{esc(project["public_id"])}/test-cases/{esc(case["public_id"])}/edit">
+                            Edit test data
+                        </a>
+                    </p>
+                </div>
+                <span class="approval-warning-badge">
+                    Needs test data
+                </span>
+            </article>
+            """
+        elif case["safe_to_execute"]:
             safe_rows += f"""
             <article class="approval-case safe-case">
                 <input type="hidden"
@@ -489,6 +518,28 @@ def approval_page(
                 {safe_rows}
             </div>
         </section>
+
+        {
+            f'''
+        <section class="approval-section">
+            <div class="approval-section-heading">
+                <div>
+                    <span>NEEDS DATA</span>
+                    <h2>Unresolved placeholders</h2>
+                    <p>
+                        These cases stay out of the plan until you replace
+                        mandatory placeholders with reviewed values.
+                    </p>
+                </div>
+            </div>
+            <div class="approval-case-list">
+                {data_rows}
+            </div>
+        </section>
+            '''
+            if data_rows
+            else ""
+        }
 
         <section class="approval-section">
             <div class="approval-section-heading">
@@ -758,7 +809,17 @@ async def create_execution_plan(
             if destructive:
                 destructive_count += 1
 
-            if case["safe_to_execute"]:
+            blockers = unresolved_test_data(case)
+
+            if blockers:
+                if case["public_id"] in approved_public_ids:
+                    return reject(
+                        "Resolve mandatory test data before approval: "
+                        + blockers[0]
+                    )
+                decision = "excluded"
+                excluded_count += 1
+            elif case["safe_to_execute"]:
                 decision = "included-safe"
                 safe_count += 1
             elif (
@@ -781,7 +842,7 @@ async def create_execution_plan(
             )
 
             if decision in {"included-safe", "approved"}:
-                blockers = approval_blockers(
+                leftover = approval_blockers(
                     {
                         "path": snapshot["endpoint_path"],
                         "headers": snapshot["request_headers"],
@@ -789,10 +850,10 @@ async def create_execution_plan(
                         "body": snapshot["request_body"],
                     }
                 )
-                if blockers:
+                if leftover:
                     return reject(
                         "Resolve mandatory test data before approval: "
-                        + blockers[0]
+                        + leftover[0]
                     )
 
             snapshots.append(snapshot)
