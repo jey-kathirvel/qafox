@@ -14,8 +14,8 @@
     "browser"
   ],
   "orientation": "any",
-  "background_color": "#efe8de",
-  "theme_color": "#efe8de",
+  "background_color": "#f7f8fc",
+  "theme_color": "#281463",
   "categories": [
     "developer",
     "business",
