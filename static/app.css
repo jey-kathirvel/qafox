@@ -3994,3 +3994,8 @@ footer a small {
     margin-top: 5px;
     color: #748097;
 }
+
+.smart-evidence-panel ul {
+    margin: 8px 0 14px;
+    padding-left: 18px;
+}

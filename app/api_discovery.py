@@ -14,7 +14,17 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+
+from app.smart_data.compatibility import (
+    collect_adapter_contracts,
+    inventory_item_from_route,
+    merge_legacy_and_adapter,
+)
+from app.smart_data.contracts import ProjectRef
+from app.smart_data.persistence import persist_contracts
+from app.smart_data.serialization import UnsafeSecretError
 
 from app.main import (
     csrf_token,
@@ -1271,8 +1281,27 @@ def run_api_discovery(
 
         try:
             discovery = discover_source(source_root)
-            endpoints = discovery["endpoints"]
-            frameworks = discovery["frameworks"]
+            project_ref = ProjectRef(
+                source_root,
+                owner_user_id=user.id,
+                project_public_id=public_id,
+            )
+            adapter_collection = collect_adapter_contracts(
+                project_ref
+            )
+            adapter_items = [
+                inventory_item_from_route(route)
+                for route in adapter_collection.routes
+            ]
+            endpoints, comparison = merge_legacy_and_adapter(
+                discovery["endpoints"],
+                adapter_items,
+                adapter_collection.detections,
+            )
+            frameworks = Counter(
+                item["framework"]
+                for item in endpoints
+            )
 
             for item in endpoints:
                 db.execute(
@@ -1329,12 +1358,39 @@ def run_api_discovery(
                         """
                     ),
                     {
-                        **item,
+                        "public_id": item["public_id"],
+                        "http_method": item["http_method"],
+                        "endpoint_path": item["endpoint_path"],
+                        "framework": item["framework"],
+                        "source_file": item.get("source_file", ""),
+                        "source_line": item.get("source_line"),
+                        "operation_id": item.get("operation_id", ""),
+                        "summary": item.get("summary", ""),
+                        "authentication": item.get(
+                            "authentication",
+                            "Unknown",
+                        ),
+                        "request_schema": item.get(
+                            "request_schema",
+                            "",
+                        ),
+                        "response_codes": item.get(
+                            "response_codes",
+                            "",
+                        ),
+                        "confidence": item["confidence"],
+                        "confidence_score": item[
+                            "confidence_score"
+                        ],
+                        "is_duplicate": item.get(
+                            "is_duplicate",
+                            False,
+                        ),
                         "discovery_run_id": run_id,
                         "project_id": project["id"],
                         "owner_user_id": user.id,
                         "warnings": json.dumps(
-                            item["warnings"]
+                            item.get("warnings") or []
                         ),
                         "route_prefix": item.get(
                             "route_prefix",
@@ -1342,7 +1398,7 @@ def run_api_discovery(
                         ),
                         "input_evidence": item.get(
                             "input_evidence",
-                            "[]",
+                            "{}",
                         ),
                         "smart_data_schema": item.get(
                             "smart_data_schema",
@@ -1351,6 +1407,23 @@ def run_api_discovery(
                         "created_at": utc_now(),
                     },
                 )
+
+            try:
+                persist_contracts(
+                    db,
+                    owner_user_id=user.id,
+                    project_id=project["id"],
+                    discovery_run_id=int(run_id),
+                    routes=adapter_collection.routes,
+                    fixtures=adapter_collection.fixtures,
+                    adapter_names=tuple(
+                        detection.framework
+                        for detection in adapter_collection.detections
+                        if detection.detected
+                    ),
+                )
+            except (SQLAlchemyError, UnsafeSecretError):
+                pass
 
             duplicate_count = sum(
                 1
@@ -1367,6 +1440,9 @@ def run_api_discovery(
                 f"{name}: {count}"
                 for name, count in frameworks.most_common()
             ) or "No supported framework detected"
+            framework_summary = (
+                f"{framework_summary}. {comparison.summary()}"
+            )
 
             completed_at = utc_now()
 
@@ -1424,7 +1500,8 @@ def run_api_discovery(
                     "owner_user_id": user.id,
                     "summary": (
                         f"API discovery completed: "
-                        f"{len(endpoints)} endpoints found."
+                        f"{len(endpoints)} endpoints found. "
+                        f"{comparison.summary()}."
                     ),
                     "created_at": completed_at,
                 },
@@ -1669,6 +1746,10 @@ def api_inventory_page(
         </div>
 
         <div class="inventory-actions">
+            <a class="outline-dark-button"
+               href="/projects/{esc(public_id)}/smart-data">
+                Review smart data
+            </a>
             <a class="outline-dark-button"
                href="/projects/{esc(public_id)}/api-inventory.json">
                 Download JSON

@@ -71,6 +71,7 @@ app/
   mfa.py                   Authenticator MFA and recovery codes
   projects.py              Private project upload and ownership isolation
   api_discovery.py         API discovery and inventory
+  smart_data_review.py     Field-level adapter contract review
   smart_configuration.py   Project-derived configuration suggestions
   test_configuration.py    Encrypted test environments
   test_case_generation.py  Test-case and smart-data generation
@@ -132,7 +133,7 @@ Never commit `.env`, encryption keys, SMTP credentials, uploaded projects, datab
 
 Apply the repository's current schema or migration procedure using a least-privileged PostgreSQL role.
 
-The first numbered patch is `PATCH-QAFOX-004B1A-6` (smart-data contract persistence). See `migrations/README.md` for backup, forward, rollback, and historical-count commands. Do not apply this patch as a rewrite of existing API, plan, run, or result tables.
+The first numbered patch is `PATCH-QAFOX-004B1A-6` (smart-data contract persistence). Live discovery compatibility is `PATCH-QAFOX-004B1A-7`: adapters are compared with the legacy scanner before inventory selection; the old scanner is not removed. See `migrations/README.md` for backup, forward, rollback, and historical-count commands. Do not apply 004B1A-6 as a rewrite of existing API, plan, run, or result tables.
 
 ### 5. Run locally
 

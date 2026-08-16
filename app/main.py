@@ -1341,6 +1341,14 @@ from app.api_discovery import router as api_discovery_router
 app.include_router(api_discovery_router)
 
 
+# Field-level smart-data review of persisted adapter contracts
+from app.smart_data_review import (
+    router as smart_data_review_router,
+)
+
+app.include_router(smart_data_review_router)
+
+
 # Hardened one-time automated API runner
 from app.automated_runner import (
     router as automated_runner_router,

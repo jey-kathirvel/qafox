@@ -1,6 +1,6 @@
 """Project-agnostic smart-data domain and adapter extension points."""
 
-from app.smart_data.adapters import AdapterRegistry, FrameworkAdapter
+from app.smart_data.adapters import AdapterRegistry, FrameworkAdapter, default_registry
 from app.smart_data.contracts import (
     AuthFlowContract,
     ConstraintContract,
@@ -30,6 +30,7 @@ __all__ = [
     "AuthFlowContract",
     "ConstraintContract",
     "DetectionResult",
+    "default_registry",
     "DependencyGraphBuilder",
     "FieldContract",
     "FrameworkAdapter",
