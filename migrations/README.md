@@ -53,3 +53,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004B1A-6/rollback.sql
 Rollback drops only `smart_data_*` tables. Re-check historical counts; they must match the pre-migration recording.
 
 This patch does not consume execution plans or backfill inventory.
+
+## PATCH-QAFOX-004B1A-8
+
+Runtime orchestration is stored inside the immutable execution-plan JSON (`orchestration`). It does not rewrite historical plans, runs, or results. No additional tables are required. Existing v1 plans continue to execute as independent requests.

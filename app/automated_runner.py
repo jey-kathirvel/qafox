@@ -27,6 +27,13 @@ from app.main import (
 )
 
 from app.test_configuration import decrypt_json
+from app.smart_data.orchestration import (
+    RuntimeStore,
+    extract_runtime_value,
+    orchestration_from_json,
+    remaining_dynamic,
+    substitute_placeholders,
+)
 from app.smart_data.placeholders import approval_blockers
 
 router = APIRouter()
@@ -752,6 +759,49 @@ def store_result(
     db.commit()
 
 
+def sort_plan_cases(cases, orchestration):
+    by_id = {}
+    for case in cases:
+        snapshot = safe_json(case["case_snapshot"], {})
+        public_id = str(snapshot.get("test_case_public_id") or "")
+        by_id[public_id] = case
+    ordered = []
+    seen = set()
+    for public_id in orchestration.execution_order:
+        case = by_id.get(public_id)
+        if case is not None:
+            ordered.append(case)
+            seen.add(public_id)
+    ordered.extend(
+        case
+        for case in cases
+        if str(safe_json(case["case_snapshot"], {}).get("test_case_public_id") or "")
+        not in seen
+    )
+    return ordered
+
+
+def apply_runtime_substitutions(snapshot, store: RuntimeStore):
+    updated = dict(snapshot)
+    updated["endpoint_path"] = substitute_placeholders(
+        snapshot.get("endpoint_path", "/"),
+        store.values,
+    )
+    updated["request_headers"] = substitute_placeholders(
+        snapshot.get("request_headers") or {},
+        store.values,
+    )
+    updated["request_query"] = substitute_placeholders(
+        snapshot.get("request_query") or {},
+        store.values,
+    )
+    updated["request_body"] = substitute_placeholders(
+        snapshot.get("request_body"),
+        store.values,
+    )
+    return updated
+
+
 def execute_run(run_id: int):
     with Session(engine) as db:
         run = (
@@ -894,6 +944,12 @@ def execute_run(run_id: int):
             .all()
         )
 
+        orchestration = orchestration_from_json(
+            stored_snapshot.get("orchestration")
+        )
+        cases = sort_plan_cases(cases, orchestration)
+        store = RuntimeStore()
+
         db.execute(
             text(
                 """
@@ -941,6 +997,35 @@ def execute_run(run_id: int):
                 plan_case["case_snapshot"],
                 {},
             )
+            case_public_id = str(
+                snapshot.get("test_case_public_id") or ""
+            )
+            snapshot = apply_runtime_substitutions(
+                snapshot,
+                store,
+            )
+
+            skip_reason = None
+            for producer_id in orchestration.producers_for_consumer(
+                case_public_id
+            ):
+                if producer_id in store.failed_producers:
+                    skip_reason = (
+                        "Producer step failed; dependent request was not sent."
+                    )
+                    break
+
+            if remaining_dynamic(
+                {
+                    "path": snapshot.get("endpoint_path", "/"),
+                    "headers": snapshot.get("request_headers") or {},
+                    "query": snapshot.get("request_query") or {},
+                    "body": snapshot.get("request_body"),
+                }
+            ):
+                skip_reason = skip_reason or (
+                    "Dynamic placeholder was not supplied by a producer in this run."
+                )
 
             method = str(
                 snapshot.get(
@@ -949,7 +1034,7 @@ def execute_run(run_id: int):
                 )
             ).upper()
 
-            endpoint_path, skip_reason = (
+            endpoint_path, path_skip = (
                 resolve_path(
                     snapshot.get(
                         "endpoint_path",
@@ -958,6 +1043,7 @@ def execute_run(run_id: int):
                     method,
                 )
             )
+            skip_reason = skip_reason or path_skip
 
             request_body = snapshot.get(
                 "request_body"
@@ -1013,6 +1099,8 @@ def execute_run(run_id: int):
                         "Skipped by runtime safety gate."
                     ),
                 )
+                if orchestration.bindings_for_producer(case_public_id):
+                    store.failed_producers.add(case_public_id)
                 continue
 
             query = snapshot.get(
@@ -1039,6 +1127,7 @@ def execute_run(run_id: int):
                         ),
                     )
                 )
+                secret_values = list(secret_values) + list(store.captured_secrets)
 
                 body = None
 
@@ -1175,6 +1264,33 @@ def execute_run(run_id: int):
                     assertion_summary=assertion,
                 )
 
+                producer_ok = (
+                    status == "passed"
+                    and 200 <= response["status_code"] < 300
+                )
+                if orchestration.bindings_for_producer(case_public_id):
+                    if not producer_ok:
+                        store.failed_producers.add(case_public_id)
+                    else:
+                        extracted_any = False
+                        for binding in orchestration.bindings_for_producer(
+                            case_public_id
+                        ):
+                            extracted = extract_runtime_value(
+                                body=raw_body,
+                                headers=response["headers"],
+                                extraction=binding.extraction,
+                            )
+                            if extracted:
+                                store.remember(
+                                    binding.variable,
+                                    extracted,
+                                    created=True,
+                                )
+                                extracted_any = True
+                        if not extracted_any:
+                            store.failed_producers.add(case_public_id)
+
             except Exception as exc:
                 store_result(
                     db,
@@ -1199,10 +1315,115 @@ def execute_run(run_id: int):
                         "Request could not be safely completed."
                     ),
                 )
+                if orchestration.bindings_for_producer(case_public_id):
+                    store.failed_producers.add(case_public_id)
 
             time.sleep(
                 MIN_REQUEST_INTERVAL_SECONDS
             )
+
+        db.expire_all()
+        stopped = run_stopped(
+            db,
+            run["id"],
+            run["owner_user_id"],
+        )
+
+        if (
+            not stopped
+            and orchestration.cleanup_approved
+        ):
+            producer_cases = {}
+            for plan_case in cases:
+                snap = safe_json(plan_case["case_snapshot"], {})
+                producer_cases[str(snap.get("test_case_public_id") or "")] = plan_case
+            cleanup_sequence = len(cases)
+            for spec in orchestration.cleanup:
+                if not spec.same_run_only or not spec.requires_approval:
+                    continue
+                created_id = store.created.get(spec.variable)
+                if not created_id:
+                    continue
+                producer_case = producer_cases.get(spec.producer_case_public_id)
+                if producer_case is None:
+                    continue
+                if spec.producer_case_public_id in store.failed_producers:
+                    continue
+                cleanup_path = substitute_placeholders(
+                    spec.path_template,
+                    store.values,
+                )
+                if remaining_dynamic(cleanup_path) or approval_blockers(cleanup_path):
+                    continue
+                cleanup_sequence += 1
+                started_at = utc_now()
+                cleanup_snapshot = {
+                    "http_method": spec.method,
+                    "endpoint_path": cleanup_path,
+                    "expected_status_codes": "200,202,204",
+                    "request_headers": {},
+                    "request_query": {},
+                    "request_body": None,
+                }
+                try:
+                    url = final_url(
+                        plan["base_url_snapshot"],
+                        cleanup_path,
+                        {},
+                    )
+                    headers, secret_values = build_runtime_headers(
+                        configuration,
+                        {},
+                    )
+                    secret_values = list(secret_values) + list(store.captured_secrets)
+                    request_started = time.monotonic()
+                    response = execute_https_request(
+                        url,
+                        spec.method,
+                        headers,
+                        None,
+                        timeout,
+                    )
+                    duration_ms = round((time.monotonic() - request_started) * 1000)
+                    raw_body = response["body"].decode("utf-8", errors="replace")
+                    passed = status_matches(
+                        response["status_code"],
+                        cleanup_snapshot["expected_status_codes"],
+                    )
+                    store_result(
+                        db,
+                        run,
+                        producer_case,
+                        cleanup_sequence,
+                        cleanup_snapshot,
+                        "passed" if passed else "failed",
+                        mask_text(url, secret_values),
+                        started_at,
+                        actual_status=response["status_code"],
+                        duration_ms=duration_ms,
+                        response_headers=mask_headers(response["headers"], secret_values),
+                        response_body=mask_text(raw_body, secret_values)[:MAX_RESPONSE_BYTES],
+                        response_size=response["size"],
+                        assertion_summary=(
+                            "Same-run cleanup completed."
+                            if passed
+                            else "Same-run cleanup did not match expected status."
+                        ),
+                    )
+                except Exception as exc:
+                    store_result(
+                        db,
+                        run,
+                        producer_case,
+                        cleanup_sequence,
+                        cleanup_snapshot,
+                        "error",
+                        plan["base_url_snapshot"] + cleanup_path,
+                        started_at,
+                        error_message=mask_text(str(exc), store.captured_secrets),
+                        assertion_summary="Same-run cleanup could not be completed.",
+                    )
+                time.sleep(MIN_REQUEST_INTERVAL_SECONDS)
 
         db.expire_all()
 

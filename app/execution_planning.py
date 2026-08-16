@@ -9,6 +9,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.smart_data.orchestration import (
+    apply_orchestration_to_snapshot,
+    build_orchestration,
+    plan_blockers,
+)
 from app.smart_data.placeholders import approval_blockers, request_payload
 
 from app.main import (
@@ -298,7 +303,10 @@ def approval_page(
         if blockers:
             blocker_text = ", ".join(blockers[:4])
             data_rows += f"""
-            <article class="approval-case approval-required-case">
+            <label class="approval-case approval-required-case">
+                <input type="checkbox"
+                       name="dependent_case"
+                       value="{esc(case["public_id"])}">
                 <div>
                     <span class="method-badge method-{esc(method_class)}">
                         {esc(case["http_method"])}
@@ -308,8 +316,9 @@ def approval_page(
                     <strong>{esc(case["title"])}</strong>
                     <code>{esc(case["endpoint_path"])}</code>
                     <small>
-                        Replace mandatory placeholders before this case can
-                        join a plan: {esc(blocker_text)}
+                        Include as a dependent step if this plan also creates
+                        the required resource. Otherwise edit the placeholder:
+                        {esc(blocker_text)}
                     </small>
                     <p>
                         <a href="/projects/{esc(project["public_id"])}/test-cases/{esc(case["public_id"])}/edit">
@@ -320,7 +329,7 @@ def approval_page(
                 <span class="approval-warning-badge">
                     Needs test data
                 </span>
-            </article>
+            </label>
             """
         elif case["safe_to_execute"]:
             safe_rows += f"""
@@ -527,8 +536,9 @@ def approval_page(
                     <span>NEEDS DATA</span>
                     <h2>Unresolved placeholders</h2>
                     <p>
-                        These cases stay out of the plan until you replace
-                        mandatory placeholders with reviewed values.
+                        These cases stay out of the plan unless you include
+                        them as dependents of a create step in this plan, or
+                        replace placeholders with reviewed values.
                     </p>
                 </div>
             </div>
@@ -559,6 +569,22 @@ def approval_page(
         </section>
 
         <section class="approval-confirmation">
+            <label class="approval-confirm-check">
+                <input type="checkbox"
+                       name="approve_cleanup"
+                       value="yes">
+                <span>
+                    <strong>
+                        Approve same-run cleanup
+                    </strong>
+                    <small>
+                        If checked, Qubi may DELETE only resources created by
+                        this run after the other steps finish. Cleanup never
+                        uses guessed or historical IDs.
+                    </small>
+                </span>
+            </label>
+
             <label class="approval-confirm-check">
                 <input type="checkbox"
                        name="understood"
@@ -717,6 +743,13 @@ async def create_execution_plan(
         str(value)
         for value in form.getlist("approved_case")
     }
+    dependent_public_ids = {
+        str(value)
+        for value in form.getlist("dependent_case")
+    }
+    cleanup_approved = (
+        str(form.get("approve_cleanup", "")) == "yes"
+    )
 
     with Session(engine) as db:
         project = owned_project(
@@ -798,11 +831,14 @@ async def create_execution_plan(
 
         if not approved_public_ids.issubset(
             valid_public_ids
+        ) or not dependent_public_ids.issubset(
+            valid_public_ids
         ):
             return reject(
                 "One or more selected cases are invalid."
             )
 
+        staged = []
         for case in cases:
             destructive = is_destructive(case)
 
@@ -817,8 +853,14 @@ async def create_execution_plan(
                         "Resolve mandatory test data before approval: "
                         + blockers[0]
                     )
-                decision = "excluded"
-                excluded_count += 1
+                if (
+                    case["public_id"] in dependent_public_ids
+                    and not destructive
+                ):
+                    decision = "pending-dependent"
+                else:
+                    decision = "excluded"
+                    excluded_count += 1
             elif case["safe_to_execute"]:
                 decision = "included-safe"
                 safe_count += 1
@@ -836,19 +878,60 @@ async def create_execution_plan(
                 )
                 excluded_count += 1
 
+            staged.append(
+                {
+                    "case": case,
+                    "decision": decision,
+                    "destructive": destructive,
+                }
+            )
+
+        bindable = [
+            item["case"]
+            for item in staged
+            if item["decision"]
+            in {"included-safe", "approved", "pending-dependent"}
+        ]
+        orchestration = build_orchestration(
+            bindable,
+            cleanup_approved=cleanup_approved,
+        )
+
+        for item in staged:
+            case = item["case"]
+            decision = item["decision"]
+            if decision == "pending-dependent":
+                if orchestration.producers_for_consumer(
+                    case["public_id"]
+                ):
+                    decision = "approved"
+                    approved_count += 1
+                    item["decision"] = decision
+                else:
+                    return reject(
+                        "No create step in this plan can supply runtime data for "
+                        + str(case["title"])
+                    )
+
             snapshot = case_snapshot(
                 case,
                 decision,
             )
-
             if decision in {"included-safe", "approved"}:
-                leftover = approval_blockers(
+                snapshot = apply_orchestration_to_snapshot(
+                    snapshot,
+                    orchestration,
+                    case["public_id"],
+                )
+                leftover = plan_blockers(
                     {
                         "path": snapshot["endpoint_path"],
                         "headers": snapshot["request_headers"],
                         "query": snapshot["request_query"],
                         "body": snapshot["request_body"],
-                    }
+                    },
+                    orchestration,
+                    case["public_id"],
                 )
                 if leftover:
                     return reject(
@@ -857,13 +940,12 @@ async def create_execution_plan(
                     )
 
             snapshots.append(snapshot)
-
             plan_rows.append(
                 {
                     "case": case,
                     "decision": decision,
                     "snapshot": snapshot,
-                    "destructive": destructive,
+                    "destructive": item["destructive"],
                 }
             )
 
@@ -880,7 +962,7 @@ async def create_execution_plan(
         approved_at = utc_now()
 
         plan_snapshot = {
-            "version": "qafox-execution-plan-v1",
+            "version": "qafox-execution-plan-v2",
             "project": {
                 "public_id": project["public_id"],
                 "name": project["name"],
@@ -922,6 +1004,7 @@ async def create_execution_plan(
                 "one_run_only": True,
             },
             "cases": snapshots,
+            "orchestration": orchestration.to_json(),
         }
 
         canonical_snapshot = json.dumps(
@@ -1221,6 +1304,25 @@ def execution_plan_detail(
         """
 
     csrf = csrf_token(request)
+    stored_plan = safe_json(plan["snapshot_json"], {})
+    orchestration = stored_plan.get("orchestration") or {}
+    binding_count = len(orchestration.get("bindings") or [])
+    cleanup_note = (
+        "Same-run cleanup approved."
+        if orchestration.get("cleanup_approved")
+        else "Same-run cleanup not approved."
+    )
+    orchestration_html = (
+        f"""
+        <p>
+            Runtime orchestration: {esc(str(binding_count))} bound dependent
+            step(s). {esc(cleanup_note)} Dynamic values are extracted only
+            from this run and never guessed.
+        </p>
+        """
+        if binding_count or orchestration.get("cleanup_approved")
+        else ""
+    )
 
     content = f"""
 <section class="execution-plan-detail">
@@ -1236,6 +1338,7 @@ def execution_plan_detail(
             The plan is immutable and approved for one execution only.
             No API request has been executed yet.
         </p>
+        {orchestration_html}
     </div>
 
     <div class="plan-summary-grid">
