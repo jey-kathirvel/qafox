@@ -281,8 +281,9 @@ class AdapterCapabilityTests(TestCase):
         self.assertIn(AdapterCapability.RESPONSE_SCHEMA.value, matrix["openapi"])
         self.assertIn(AdapterCapability.FIXTURES.value, matrix["postman"])
         self.assertIn(AdapterCapability.PREFIX_COMPOSITION.value, matrix["express"])
-        self.assertNotIn(AdapterCapability.MODEL_RELATIONSHIPS.value, matrix["express"])
-        self.assertNotIn(AdapterCapability.RESPONSE_SCHEMA.value, matrix["django"])
+        self.assertIn(AdapterCapability.REQUEST_SCHEMA.value, matrix["express"])
+        self.assertIn(AdapterCapability.VALIDATION.value, matrix["django"])
+        self.assertIn(AdapterCapability.MODEL_RELATIONSHIPS.value, matrix["express"])
         self.assertNotIn(AdapterCapability.FIXTURES.value, matrix["openapi"])
         for adapter in default_registry().all():
             self.assertEqual(adapter.capabilities, capabilities_for(adapter.name))

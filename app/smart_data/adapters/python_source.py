@@ -99,9 +99,29 @@ def annotation_name(node: ast.AST | None) -> str:
         base = dotted_name(node.value)
         inner = annotation_name(node.slice)
         return f"{base}[{inner}]"
+    if isinstance(node, ast.Tuple):
+        return ", ".join(annotation_name(elt) for elt in node.elts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         return f"{annotation_name(node.left)} | {annotation_name(node.right)}"
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
     return dotted_name(node)
+
+
+def unwrap_annotated(node: ast.AST | None) -> tuple[ast.AST | None, list[ast.AST]]:
+    if isinstance(node, ast.Subscript) and dotted_name(node.value).split(".")[-1] == "Annotated":
+        slice_node = node.slice
+        elts = list(slice_node.elts) if isinstance(slice_node, ast.Tuple) else [slice_node]
+        if elts:
+            return elts[0], elts[1:]
+    return node, []
+
+
+def annotation_is_optional(node: ast.AST | None) -> bool:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return annotation_is_optional(node.left) or annotation_is_optional(node.right)
+    name = annotation_name(node).lower()
+    return name in {"none", "nonetype"} or name.startswith("optional[") or "| none" in name
 
 
 def source_excerpt(parsed: ParsedPython, node: ast.AST, limit: int = 300) -> str:

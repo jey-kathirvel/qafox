@@ -35,42 +35,88 @@ ADAPTER_CAPABILITY_MATRIX: dict[str, frozenset[AdapterCapability]] = {
         {
             C.ROUTES,
             C.REQUEST_SCHEMA,
+            C.RESPONSE_SCHEMA,
             C.VALIDATION,
             C.AUTHENTICATION,
             C.DEPENDENCIES,
             C.PREFIX_COMPOSITION,
             C.SECURITY_HINTS,
+            C.MODEL_RELATIONSHIPS,
         }
     ),
     "flask": frozenset(
         {
             C.ROUTES,
             C.REQUEST_SCHEMA,
+            C.VALIDATION,
             C.AUTHENTICATION,
             C.PREFIX_COMPOSITION,
             C.SECURITY_HINTS,
         }
     ),
-    "express": frozenset({C.ROUTES, C.PREFIX_COMPOSITION}),
+    "express": frozenset(
+        {
+            C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
+            C.AUTHENTICATION,
+            C.PREFIX_COMPOSITION,
+            C.SECURITY_HINTS,
+            C.MODEL_RELATIONSHIPS,
+        }
+    ),
     "nestjs": frozenset(
         {
             C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
             C.PREFIX_COMPOSITION,
             C.AUTHENTICATION,
             C.SECURITY_HINTS,
         }
     ),
-    "django": frozenset({C.ROUTES, C.PREFIX_COMPOSITION}),
+    "django": frozenset(
+        {
+            C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
+            C.AUTHENTICATION,
+            C.PREFIX_COMPOSITION,
+            C.MODEL_RELATIONSHIPS,
+            C.SECURITY_HINTS,
+        }
+    ),
     "spring": frozenset(
         {
             C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
             C.PREFIX_COMPOSITION,
             C.AUTHENTICATION,
             C.SECURITY_HINTS,
         }
     ),
-    "laravel": frozenset({C.ROUTES, C.PREFIX_COMPOSITION}),
-    "aspnet": frozenset({C.ROUTES, C.PREFIX_COMPOSITION}),
+    "laravel": frozenset(
+        {
+            C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
+            C.AUTHENTICATION,
+            C.PREFIX_COMPOSITION,
+            C.MODEL_RELATIONSHIPS,
+            C.SECURITY_HINTS,
+        }
+    ),
+    "aspnet": frozenset(
+        {
+            C.ROUTES,
+            C.REQUEST_SCHEMA,
+            C.VALIDATION,
+            C.AUTHENTICATION,
+            C.PREFIX_COMPOSITION,
+            C.SECURITY_HINTS,
+        }
+    ),
 }
 
 REGISTERED_ADAPTERS = (

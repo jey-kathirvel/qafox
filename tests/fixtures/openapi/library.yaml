@@ -19,6 +19,9 @@ components:
         author_id:
           type: integer
           minimum: 1
+        contact_email:
+          type: string
+          format: email
         genre:
           type: string
           enum: [fiction, reference]
