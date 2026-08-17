@@ -22,7 +22,7 @@ class FastAPIAdapterTests(TestCase):
         )
 
     def test_extracts_pydantic_constraints_and_secret_classification(self):
-        schema = self.adapter.extract_schemas(self.project)[0]
+        schema = next(item for item in self.adapter.extract_schemas(self.project) if item.name == "BookCreate")
         fields = {field.name: field for field in schema.fields}
         self.assertEqual(fields["title"].min_length, 2)
         self.assertEqual(fields["title"].max_length, 120)

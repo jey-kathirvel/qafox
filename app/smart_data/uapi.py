@@ -626,6 +626,14 @@ def _parameter_location_for_schema(schema: SchemaContract, field_name: str, path
         return ParameterLocation.MULTIPART
     if name in {"form-data", "form"} or "x-www-form-urlencoded" in content:
         return ParameterLocation.FORM
+    if name in {"header-parameters", "headers"}:
+        return ParameterLocation.HEADER
+    if name in {"cookie-parameters", "cookies"}:
+        return ParameterLocation.COOKIE
+    if name in {"query-parameters", "query"}:
+        return ParameterLocation.QUERY
+    if name in {"path-parameters", "path"}:
+        return ParameterLocation.PATH
     if name in {"request-body", "body"} or "json" in content or "xml" in content:
         return ParameterLocation.BODY
     if field_name in path_parameter_names(path):
@@ -714,8 +722,19 @@ def operation_from_route(route: RouteContract) -> OperationContract:
     request_schema: SchemaContract | None = None
     seen_params: set[tuple[str, str]] = set()
 
+    parameter_bag_names = {
+        "parameters",
+        "path-parameters",
+        "query-parameters",
+        "header-parameters",
+        "cookie-parameters",
+        "headers",
+        "query",
+        "path",
+        "cookies",
+    }
     for schema in route.request_schemas:
-        is_parameter_bag = schema.name.lower() == "parameters"
+        is_parameter_bag = schema.name.lower() in parameter_bag_names
         if not is_parameter_bag:
             if request_schema is None:
                 request_schema = schema

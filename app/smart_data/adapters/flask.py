@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from app.smart_data.adapters.base import FrameworkAdapter
 from app.smart_data.adapters.fastapi import _join, _relative_module
 from app.smart_data.adapters.python_source import ParsedPython, call_string, dotted_name, iter_python, keyword, source_excerpt, static_value
+from app.smart_data.adapters.semantics import field_contract
 from app.smart_data.contracts import (
     AuthenticationMode,
     AuthFlowContract,
@@ -17,7 +18,6 @@ from app.smart_data.contracts import (
     ProjectRef,
     RouteContract,
     SchemaContract,
-    SemanticType,
     SourceEvidence,
     TestDataSource,
 )
@@ -39,17 +39,56 @@ def _evidence(parsed: ParsedPython, node: ast.AST, kind: str) -> tuple[SourceEvi
     )
 
 
-def _semantic(name: str) -> SemanticType:
-    lowered = name.lower()
-    if "email" in lowered:
-        return SemanticType.EMAIL
-    if any(signal in lowered for signal in ("password", "secret", "token", "api_key")):
-        return SemanticType.SECRET
-    if lowered.endswith("_id") or (lowered.endswith("id") and lowered != "id"):
-        return SemanticType.FOREIGN_KEY
-    if lowered == "id":
-        return SemanticType.IDENTIFIER
-    return SemanticType.UNKNOWN
+def _marshmallow_fields(parsed: ParsedPython, node: ast.ClassDef) -> list[FieldContract]:
+    fields: list[FieldContract] = []
+    for child in node.body:
+        if not isinstance(child, ast.Assign):
+            continue
+        if not child.targets or not isinstance(child.targets[0], ast.Name):
+            continue
+        if not isinstance(child.value, ast.Call):
+            continue
+        ctor = dotted_name(child.value.func)
+        if "fields." not in ctor and not ctor.split(".")[-1][0].isupper():
+            continue
+        name = child.targets[0].id
+        required = static_value(keyword(child.value, "required")) is True
+        type_hint = ctor.split(".")[-1]
+        min_length = max_length = None
+        for arg in child.value.args:
+            pass
+        for item in child.value.keywords:
+            if item.arg == "validate" and isinstance(item.value, ast.Call):
+                min_length = static_value(keyword(item.value, "min"))
+                max_length = static_value(keyword(item.value, "max"))
+        fields.append(
+            field_contract(
+                name,
+                type_hint=type_hint,
+                validators=[ctor],
+                required=bool(required),
+                min_length=min_length if isinstance(min_length, int) else None,
+                max_length=max_length if isinstance(max_length, int) else None,
+                evidence=_evidence(parsed, child, "marshmallow-field"),
+                source_file=parsed.relative_path,
+                source_line=getattr(child, "lineno", None),
+                confidence_score=90,
+            )
+        )
+    return fields
+
+
+def _semantic_field(name: str, parsed: ParsedPython, node: ast.AST, required: bool, type_hint: str = "string") -> FieldContract:
+    ev = _evidence(parsed, node, "flask-request-field")
+    return field_contract(
+        name,
+        type_hint=type_hint,
+        required=required,
+        evidence=ev,
+        source_file=parsed.relative_path,
+        source_line=getattr(node, "lineno", None),
+        confidence_score=82,
+    )
 
 
 @dataclass(slots=True)
@@ -76,10 +115,12 @@ class _Index:
     imports: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     edges: list[tuple[tuple[str, str], tuple[str, str], str]] = field(default_factory=list)
     routes: list[_Route] = field(default_factory=list)
+    marshmallow: dict[str, SchemaContract] = field(default_factory=dict)
 
 
 class FlaskAdapter(FrameworkAdapter):
     name = "flask"
+    adapter_version = "2"
 
     def _index(self, project: ProjectRef) -> _Index:
         index = _Index()
@@ -99,6 +140,17 @@ class FlaskAdapter(FrameworkAdapter):
                     for target in targets:
                         if isinstance(target, ast.Name):
                             index.containers[(parsed.module, target.id)] = _Container(parsed, target.id, prefix, constructor == "Flask")
+                if isinstance(node, ast.ClassDef) and any("Schema" in dotted_name(base) for base in node.bases):
+                    fields = _marshmallow_fields(parsed, node)
+                    if fields:
+                        index.marshmallow[node.name] = SchemaContract(
+                            node.name,
+                            "object",
+                            tuple(fields),
+                            "application/json",
+                            confidence_score=90,
+                            evidence=_evidence(parsed, node, "marshmallow-schema"),
+                        )
         for parsed in parsed_files:
             for node in ast.walk(parsed.tree):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "register_blueprint" and isinstance(node.func.value, ast.Name) and node.args:
@@ -154,7 +206,23 @@ class FlaskAdapter(FrameworkAdapter):
             if container is None:
                 continue
             fields = self._request_fields(route)
-            schemas = (SchemaContract("request-fields", "object", tuple(fields), self._content_type(route), confidence_score=82, evidence=_evidence(route.parsed, route.function, "flask-request-fields")),) if fields else ()
+            schemas: list[SchemaContract] = []
+            if fields:
+                schemas.append(
+                    SchemaContract(
+                        "request-fields",
+                        "object",
+                        tuple(fields),
+                        self._content_type(route),
+                        confidence_score=82,
+                        evidence=_evidence(route.parsed, route.function, "flask-request-fields"),
+                    )
+                )
+            for schema in index.marshmallow.values():
+                if schema.name.lower().replace("schema", "") in route.function.name.lower() or any(
+                    field.name in {item.name for item in fields} for field in schema.fields
+                ):
+                    schemas.append(schema)
             contracts.append(
                 RouteContract(
                     route.method,
@@ -162,7 +230,7 @@ class FlaskAdapter(FrameworkAdapter):
                     "Flask",
                     route.function.name,
                     ast.get_docstring(route.function) or "",
-                    schemas,
+                    tuple(schemas),
                     authentication=(self._authentication(route),),
                     confidence_score=95,
                     evidence=_evidence(route.parsed, route.decorator, "flask-route"),
@@ -172,18 +240,30 @@ class FlaskAdapter(FrameworkAdapter):
 
     def _request_fields(self, route: _Route) -> list[FieldContract]:
         fields: dict[str, FieldContract] = {}
+        json_aliases = set()
         for node in ast.walk(route.function):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and "get_json" in dotted_name(node.value.func):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        json_aliases.add(target.id)
+            if isinstance(node, ast.Subscript):
+                access = dotted_name(node.value)
+                if any(signal in access for signal in ("request.json", "request.args", "request.form", "request.headers", *json_aliases)):
+                    name = static_value(node.slice)
+                    if isinstance(name, str) and name not in fields:
+                        fields[name] = _semantic_field(name, route.parsed, node, True)
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
             access = dotted_name(node.func.value)
-            if node.func.attr not in {"get", "pop"} or not any(signal in access for signal in ("request.form", "request.args", "request.values", "request.files", "request.headers", "payload", "data")):
+            if node.func.attr not in {"get", "pop"} or not any(
+                signal in access for signal in ("request.form", "request.args", "request.values", "request.files", "request.headers", "request.json", "payload", "data", *json_aliases)
+            ):
                 continue
             name = call_string(node)
             if not name or name in fields:
                 continue
             required = len(node.args) < 2 and keyword(node, "default") is None
-            semantic = _semantic(name)
-            fields[name] = FieldContract(name, semantic, "string", required, secret=semantic is SemanticType.SECRET, confidence_score=82, source_file=route.parsed.relative_path, source_line=getattr(node, "lineno", None), evidence=_evidence(route.parsed, node, "flask-request-field"))
+            fields[name] = _semantic_field(name, route.parsed, node, required)
         return list(fields.values())
 
     @staticmethod
@@ -214,10 +294,18 @@ class FlaskAdapter(FrameworkAdapter):
         return AuthFlowContract("flask-source-auth", tuple(modes) or (AuthenticationMode.PUBLIC,), bool(modes), confidence_score=84 if modes else 65, evidence=_evidence(route.parsed, route.function, "authentication"))
 
     def extract_schemas(self, project: ProjectRef) -> list[SchemaContract]:
-        return [schema for route in self.discover_routes(project) for schema in route.request_schemas]
+        index = self._index(project)
+        return list(index.marshmallow.values()) + [
+            schema for route in self.discover_routes(project) for schema in route.request_schemas
+        ]
 
     def extract_constraints(self, project: ProjectRef) -> list[ConstraintContract]:
-        return []
+        return [
+            constraint
+            for schema in self.extract_schemas(project)
+            for field in schema.fields
+            for constraint in field.constraints
+        ]
 
     def extract_auth_flows(self, project: ProjectRef) -> list[AuthFlowContract]:
         return [flow for route in self.discover_routes(project) for flow in route.authentication]
