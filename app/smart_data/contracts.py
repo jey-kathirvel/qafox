@@ -80,6 +80,18 @@ class SourceEvidence:
     excerpt: str = ""
     confidence_score: int = 0
 
+    def to_dict(self) -> dict[str, Any]:
+        from app.smart_data.serialization import evidence_to_json
+
+        return evidence_to_json((self,))[0]
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any] | None) -> SourceEvidence:
+        from app.smart_data.serialization import evidence_from_json
+
+        items = evidence_from_json([payload or {}])
+        return items[0] if items else cls(source_file="")
+
 
 @dataclass(frozen=True, slots=True)
 class DetectionResult:
@@ -98,6 +110,30 @@ class ConstraintContract:
     message: str = ""
     confidence_score: int = 0
     evidence: tuple[SourceEvidence, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        from app.smart_data.serialization import evidence_to_json
+
+        return {
+            "name": self.name,
+            "value": self.value,
+            "message": self.message,
+            "confidence_score": self.confidence_score,
+            "evidence": evidence_to_json(self.evidence),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any] | None) -> ConstraintContract:
+        from app.smart_data.serialization import evidence_from_json
+
+        item = payload or {}
+        return cls(
+            name=str(item.get("name", "")),
+            value=item.get("value"),
+            message=str(item.get("message", "")),
+            confidence_score=int(item.get("confidence_score") or 0),
+            evidence=evidence_from_json(item.get("evidence")),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +170,33 @@ class FieldContract:
     constraints: tuple[ConstraintContract, ...] = ()
     children: tuple[FieldContract, ...] = ()
     evidence: tuple[SourceEvidence, ...] = ()
+    path: str = ""
+    read_only: bool = False
+    write_only: bool = False
+    sensitive: bool = False
+    example_values: tuple[Any, ...] = ()
+    exclusive_minimum: int | float | bool | None = None
+    exclusive_maximum: int | float | bool | None = None
+    multiple_of: int | float | None = None
+    min_items: int | None = None
+    max_items: int | None = None
+    unique_items: bool = False
+    items: FieldContract | None = None
+    one_of: tuple[FieldContract, ...] = ()
+    any_of: tuple[FieldContract, ...] = ()
+    all_of: tuple[FieldContract, ...] = ()
+    source_location: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        from app.smart_data.serialization import field_to_json
+
+        return field_to_json(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> FieldContract:
+        from app.smart_data.serialization import field_from_json
+
+        return field_from_json(payload)
 
 
 @dataclass(frozen=True, slots=True)
