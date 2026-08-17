@@ -105,14 +105,23 @@ def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
 
 
+def _field_examples(field: FieldContract) -> list[Any]:
+    if field.secret or field.sensitive:
+        return []
+    return list(field.example_values)
+
+
 def field_to_json(field: FieldContract) -> dict[str, Any]:
     generated = field.generated_value
     default = field.default_value
     if field.secret:
         generated = require_secret_reference(generated)
         default = None
+    elif field.sensitive:
+        default = None
     return {
         "name": field.name,
+        "path": field.path or field.name,
         "semantic_type": _enum_value(field.semantic_type),
         "data_type": field.data_type,
         "required": field.required,
@@ -126,6 +135,16 @@ def field_to_json(field: FieldContract) -> dict[str, Any]:
         "enum_values": list(field.enum_values),
         "nullable": field.nullable,
         "secret": field.secret,
+        "sensitive": field.sensitive or field.secret,
+        "read_only": field.read_only,
+        "write_only": field.write_only,
+        "example_values": _field_examples(field),
+        "exclusive_minimum": field.exclusive_minimum,
+        "exclusive_maximum": field.exclusive_maximum,
+        "multiple_of": field.multiple_of,
+        "min_items": field.min_items,
+        "max_items": field.max_items,
+        "unique_items": field.unique_items,
         "dependency": None
         if field.dependency is None
         else {
@@ -139,6 +158,12 @@ def field_to_json(field: FieldContract) -> dict[str, Any]:
         "confidence_score": field.confidence_score,
         "source_file": field.source_file,
         "source_line": field.source_line,
+        "source_location": field.source_location
+        or (
+            f"{field.source_file}:{field.source_line}"
+            if field.source_file and field.source_line is not None
+            else field.source_file
+        ),
         "editable": field.editable,
         "constraints": [
             {
@@ -151,6 +176,10 @@ def field_to_json(field: FieldContract) -> dict[str, Any]:
             for item in field.constraints
         ],
         "children": [field_to_json(child) for child in field.children],
+        "items": None if field.items is None else field_to_json(field.items),
+        "one_of": [field_to_json(item) for item in field.one_of],
+        "any_of": [field_to_json(item) for item in field.any_of],
+        "all_of": [field_to_json(item) for item in field.all_of],
         "evidence": evidence_to_json(field.evidence),
     }
 
@@ -166,11 +195,15 @@ def field_from_json(payload: Mapping[str, Any]) -> FieldContract:
             confidence_score=int(dependency_payload.get("confidence_score") or 0),
         )
     secret = bool(payload.get("secret"))
+    sensitive = bool(payload.get("sensitive")) or secret
     generated = payload.get("generated_value")
     default = payload.get("default_value")
     if secret:
         generated = require_secret_reference(generated)
         default = None
+    elif sensitive:
+        default = None
+    items_payload = payload.get("items")
     return FieldContract(
         name=str(payload.get("name", "")),
         semantic_type=SemanticType(str(payload.get("semantic_type", "unknown"))),
@@ -205,6 +238,22 @@ def field_from_json(payload: Mapping[str, Any]) -> FieldContract:
         ),
         children=tuple(field_from_json(child) for child in payload.get("children") or ()),
         evidence=evidence_from_json(payload.get("evidence")),
+        path=str(payload.get("path") or payload.get("name") or ""),
+        read_only=bool(payload.get("read_only")),
+        write_only=bool(payload.get("write_only")),
+        sensitive=sensitive,
+        example_values=() if secret or sensitive else tuple(payload.get("example_values") or ()),
+        exclusive_minimum=payload.get("exclusive_minimum"),
+        exclusive_maximum=payload.get("exclusive_maximum"),
+        multiple_of=payload.get("multiple_of"),
+        min_items=payload.get("min_items"),
+        max_items=payload.get("max_items"),
+        unique_items=bool(payload.get("unique_items")),
+        items=None if not isinstance(items_payload, Mapping) else field_from_json(items_payload),
+        one_of=tuple(field_from_json(item) for item in payload.get("one_of") or ()),
+        any_of=tuple(field_from_json(item) for item in payload.get("any_of") or ()),
+        all_of=tuple(field_from_json(item) for item in payload.get("all_of") or ()),
+        source_location=str(payload.get("source_location", "")),
     )
 
 
