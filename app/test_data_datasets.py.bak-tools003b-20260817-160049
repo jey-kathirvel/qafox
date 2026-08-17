@@ -1,0 +1,521 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import text
+
+
+MAX_DATASET_ROWS = 500
+MAX_DATASET_BYTES = 2_000_000
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def sha256_json(value: Any) -> str:
+    return hashlib.sha256(
+        canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def normalize_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        raise ValueError("Dataset rows must be an array.")
+
+    if len(rows) > MAX_DATASET_ROWS:
+        raise ValueError(
+            f"Maximum {MAX_DATASET_ROWS} rows per saved dataset."
+        )
+
+    normalized = []
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"Dataset row {index + 1} must be an object."
+            )
+
+        normalized.append(row)
+
+    encoded = canonical_json(normalized)
+
+    if len(encoded.encode("utf-8")) > MAX_DATASET_BYTES:
+        raise ValueError(
+            "Dataset exceeds the 2 MB persistence limit."
+        )
+
+    return normalized
+
+
+def project_for_owner(
+    db,
+    owner_user_id: int,
+    project_public_id: str | None,
+):
+    if not project_public_id:
+        return None
+
+    return db.execute(
+        text(
+            """
+            SELECT id,
+                   public_id,
+                   name
+            FROM projects
+            WHERE public_id = :public_id
+              AND owner_user_id = :owner_user_id
+              AND deleted_at IS NULL
+            LIMIT 1
+            """
+        ),
+        {
+            "public_id": project_public_id,
+            "owner_user_id": owner_user_id,
+        },
+    ).mappings().first()
+
+
+def list_projects(db, owner_user_id: int):
+    return db.execute(
+        text(
+            """
+            SELECT public_id,
+                   name,
+                   environment
+            FROM projects
+            WHERE owner_user_id = :owner_user_id
+              AND deleted_at IS NULL
+            ORDER BY updated_at DESC,
+                     id DESC
+            """
+        ),
+        {
+            "owner_user_id": owner_user_id,
+        },
+    ).mappings().all()
+
+
+def list_datasets(db, owner_user_id: int):
+    return db.execute(
+        text(
+            """
+            SELECT
+                d.public_id,
+                d.name,
+                d.description,
+                d.domain,
+                d.objective,
+                d.locale,
+                d.version,
+                d.row_count,
+                d.dataset_sha256,
+                d.updated_at,
+                p.public_id AS project_public_id,
+                p.name AS project_name
+            FROM qa_test_datasets d
+            LEFT JOIN projects p
+              ON p.id = d.project_id
+             AND p.owner_user_id = d.owner_user_id
+            WHERE d.owner_user_id = :owner_user_id
+              AND d.status = 'active'
+            ORDER BY d.updated_at DESC,
+                     d.id DESC
+            LIMIT 100
+            """
+        ),
+        {
+            "owner_user_id": owner_user_id,
+        },
+    ).mappings().all()
+
+
+def get_dataset(
+    db,
+    owner_user_id: int,
+    public_id: str,
+):
+    return db.execute(
+        text(
+            """
+            SELECT
+                d.*,
+                p.public_id AS project_public_id,
+                p.name AS project_name
+            FROM qa_test_datasets d
+            LEFT JOIN projects p
+              ON p.id = d.project_id
+             AND p.owner_user_id = d.owner_user_id
+            WHERE d.public_id = :public_id
+              AND d.owner_user_id = :owner_user_id
+              AND d.status = 'active'
+            LIMIT 1
+            """
+        ),
+        {
+            "public_id": public_id,
+            "owner_user_id": owner_user_id,
+        },
+    ).mappings().first()
+
+
+def save_dataset(
+    db,
+    *,
+    owner_user_id: int,
+    public_id: str | None,
+    name: str,
+    description: str,
+    domain: str,
+    objective: str,
+    locale: str,
+    project_public_id: str | None,
+    schema: Any,
+    semantic: Any,
+    rows: Any,
+):
+    name = str(name or "").strip()
+
+    if not name:
+        raise ValueError("Dataset name is required.")
+
+    if len(name) > 180:
+        raise ValueError(
+            "Dataset name must be 180 characters or fewer."
+        )
+
+    rows = normalize_rows(rows)
+
+    schema = (
+        schema
+        if isinstance(schema, (dict, list))
+        else {}
+    )
+
+    semantic = (
+        semantic
+        if isinstance(semantic, dict)
+        else {}
+    )
+
+    project = project_for_owner(
+        db,
+        owner_user_id,
+        project_public_id,
+    )
+
+    if (
+        project_public_id
+        and not project
+    ):
+        raise ValueError(
+            "Selected project was not found in your workspace."
+        )
+
+    row_count = len(rows)
+
+    dataset_hash = sha256_json(
+        {
+            "rows": rows,
+            "schema": schema,
+            "semantic": semantic,
+        }
+    )
+
+    now = datetime.utcnow()
+
+    existing = None
+
+    if public_id:
+        existing = get_dataset(
+            db,
+            owner_user_id,
+            public_id,
+        )
+
+        if not existing:
+            raise ValueError(
+                "Dataset was not found in your workspace."
+            )
+
+    if existing:
+        version = int(
+            existing["version"] or 1
+        ) + 1
+
+        db.execute(
+            text(
+                """
+                INSERT INTO qa_test_dataset_versions (
+                    public_id,
+                    dataset_id,
+                    owner_user_id,
+                    version,
+                    row_count,
+                    schema_json,
+                    semantic_json,
+                    dataset_json,
+                    dataset_sha256,
+                    created_at
+                )
+                VALUES (
+                    :public_id,
+                    :dataset_id,
+                    :owner_user_id,
+                    :version,
+                    :row_count,
+                    :schema_json,
+                    :semantic_json,
+                    :dataset_json,
+                    :dataset_sha256,
+                    :created_at
+                )
+                ON CONFLICT (
+                    dataset_id,
+                    version
+                )
+                DO NOTHING
+                """
+            ),
+            {
+                "public_id": str(uuid.uuid4()),
+                "dataset_id": existing["id"],
+                "owner_user_id": owner_user_id,
+                "version": existing["version"],
+                "row_count": existing["row_count"],
+                "schema_json": existing["schema_json"],
+                "semantic_json": existing["semantic_json"],
+                "dataset_json": existing["dataset_json"],
+                "dataset_sha256": existing["dataset_sha256"],
+                "created_at": now,
+            },
+        )
+
+        db.execute(
+            text(
+                """
+                UPDATE qa_test_datasets
+                SET
+                    project_id = :project_id,
+                    name = :name,
+                    description = :description,
+                    domain = :domain,
+                    objective = :objective,
+                    locale = :locale,
+                    version = :version,
+                    row_count = :row_count,
+                    schema_json = :schema_json,
+                    semantic_json = :semantic_json,
+                    dataset_json = :dataset_json,
+                    dataset_sha256 = :dataset_sha256,
+                    updated_at = :updated_at
+                WHERE id = :dataset_id
+                  AND owner_user_id = :owner_user_id
+                """
+            ),
+            {
+                "project_id":
+                    project["id"]
+                    if project else None,
+                "name": name,
+                "description":
+                    str(description or "")[:4000],
+                "domain":
+                    str(domain or "general")[:60],
+                "objective":
+                    str(objective or "functional")[:60],
+                "locale":
+                    str(locale or "india")[:40],
+                "version": version,
+                "row_count": row_count,
+                "schema_json":
+                    canonical_json(schema),
+                "semantic_json":
+                    canonical_json(semantic),
+                "dataset_json":
+                    canonical_json(rows),
+                "dataset_sha256":
+                    dataset_hash,
+                "updated_at": now,
+                "dataset_id": existing["id"],
+                "owner_user_id": owner_user_id,
+            },
+        )
+
+        dataset_public_id = existing["public_id"]
+
+    else:
+        version = 1
+        dataset_public_id = str(
+            uuid.uuid4()
+        )
+
+        result = db.execute(
+            text(
+                """
+                INSERT INTO qa_test_datasets (
+                    public_id,
+                    owner_user_id,
+                    project_id,
+                    name,
+                    description,
+                    domain,
+                    objective,
+                    locale,
+                    version,
+                    status,
+                    row_count,
+                    schema_json,
+                    semantic_json,
+                    dataset_json,
+                    dataset_sha256,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :public_id,
+                    :owner_user_id,
+                    :project_id,
+                    :name,
+                    :description,
+                    :domain,
+                    :objective,
+                    :locale,
+                    :version,
+                    'active',
+                    :row_count,
+                    :schema_json,
+                    :semantic_json,
+                    :dataset_json,
+                    :dataset_sha256,
+                    :created_at,
+                    :updated_at
+                )
+                RETURNING id
+                """
+            ),
+            {
+                "public_id":
+                    dataset_public_id,
+                "owner_user_id":
+                    owner_user_id,
+                "project_id":
+                    project["id"]
+                    if project else None,
+                "name": name,
+                "description":
+                    str(description or "")[:4000],
+                "domain":
+                    str(domain or "general")[:60],
+                "objective":
+                    str(objective or "functional")[:60],
+                "locale":
+                    str(locale or "india")[:40],
+                "version": 1,
+                "row_count": row_count,
+                "schema_json":
+                    canonical_json(schema),
+                "semantic_json":
+                    canonical_json(semantic),
+                "dataset_json":
+                    canonical_json(rows),
+                "dataset_sha256":
+                    dataset_hash,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        dataset_id = result.scalar_one()
+
+        db.execute(
+            text(
+                """
+                INSERT INTO qa_test_dataset_versions (
+                    public_id,
+                    dataset_id,
+                    owner_user_id,
+                    version,
+                    row_count,
+                    schema_json,
+                    semantic_json,
+                    dataset_json,
+                    dataset_sha256,
+                    created_at
+                )
+                VALUES (
+                    :public_id,
+                    :dataset_id,
+                    :owner_user_id,
+                    1,
+                    :row_count,
+                    :schema_json,
+                    :semantic_json,
+                    :dataset_json,
+                    :dataset_sha256,
+                    :created_at
+                )
+                """
+            ),
+            {
+                "public_id":
+                    str(uuid.uuid4()),
+                "dataset_id":
+                    dataset_id,
+                "owner_user_id":
+                    owner_user_id,
+                "row_count":
+                    row_count,
+                "schema_json":
+                    canonical_json(schema),
+                "semantic_json":
+                    canonical_json(semantic),
+                "dataset_json":
+                    canonical_json(rows),
+                "dataset_sha256":
+                    dataset_hash,
+                "created_at":
+                    now,
+            },
+        )
+
+    return get_dataset(
+        db,
+        owner_user_id,
+        dataset_public_id,
+    )
+
+
+def archive_dataset(
+    db,
+    owner_user_id: int,
+    public_id: str,
+) -> bool:
+    result = db.execute(
+        text(
+            """
+            UPDATE qa_test_datasets
+            SET
+                status = 'archived',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE public_id = :public_id
+              AND owner_user_id = :owner_user_id
+              AND status = 'active'
+            """
+        ),
+        {
+            "public_id": public_id,
+            "owner_user_id": owner_user_id,
+        },
+    )
+
+    return bool(result.rowcount)

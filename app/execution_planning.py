@@ -957,6 +957,62 @@ async def create_execution_plan(
                         + leftover[0]
                     )
 
+            # BEGIN PATCH-QAFOX-TOOLS-003C
+            # Freeze a bound reusable QA dataset into this NEW
+            # execution-plan case snapshot. Historical plans are
+            # never queried or modified.
+            from app.test_data_datasets import (
+                execution_dataset_snapshot,
+            )
+
+            dataset_snapshot = execution_dataset_snapshot(
+                db,
+                owner_user_id=user.id,
+                project_id=project["id"],
+                test_case_id=case["id"],
+            )
+
+            if dataset_snapshot:
+                snapshot["qa_dataset"] = dataset_snapshot
+
+                snapshot["qa_dataset_binding"] = {
+                    "dataset_public_id":
+                        dataset_snapshot[
+                            "dataset_public_id"
+                        ],
+
+                    "dataset_name":
+                        dataset_snapshot[
+                            "dataset_name"
+                        ],
+
+                    "dataset_version":
+                        dataset_snapshot[
+                            "dataset_version"
+                        ],
+
+                    "dataset_sha256":
+                        dataset_snapshot[
+                            "dataset_sha256"
+                        ],
+
+                    "row_count":
+                        len(
+                            dataset_snapshot.get(
+                                "rows"
+                            )
+                            or []
+                        ),
+
+                    "snapshot_source":
+                        "qa_test_dataset_bindings",
+
+                    "immutable":
+                        True,
+                }
+
+            # END PATCH-QAFOX-TOOLS-003C
+
             snapshots.append(snapshot)
             plan_rows.append(
                 {
@@ -1214,6 +1270,65 @@ async def create_execution_plan(
     "/projects/{public_id}/execution-plans/{plan_public_id}",
     response_class=HTMLResponse,
 )
+def dataset_snapshot_badge(snapshot):
+    dataset = (
+        snapshot.get("qa_dataset")
+        if isinstance(snapshot, dict)
+        else None
+    )
+
+    if not isinstance(
+        dataset,
+        dict,
+    ):
+        return ""
+
+    name = esc(
+        dataset.get(
+            "dataset_name",
+            "QA Test Dataset",
+        )
+    )
+
+    version = esc(
+        str(
+            dataset.get(
+                "dataset_version",
+                "",
+            )
+        )
+    )
+
+    rows = dataset.get(
+        "rows"
+    )
+
+    count = (
+        len(rows)
+        if isinstance(rows, list)
+        else 0
+    )
+
+    fingerprint = esc(
+        str(
+            dataset.get(
+                "dataset_sha256",
+                "",
+            )
+        )[:12]
+    )
+
+    return f"""
+        <span class="qa-dataset-plan-badge">
+            ✦ {name}
+            · v{version}
+            · {count} rows
+            · {fingerprint}…
+        </span>
+    """
+
+
+
 def execution_plan_detail(
     request: Request,
     public_id: str,

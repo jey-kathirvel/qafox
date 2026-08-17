@@ -1,0 +1,2366 @@
+(() => {
+    "use strict";
+
+    const $ = (selector, root = document) =>
+        root.querySelector(selector);
+
+    const $$ = (selector, root = document) =>
+        Array.from(root.querySelectorAll(selector));
+
+
+    const tableBody = $("#qa-testdata-results");
+
+                }
+
+                buildRows();
+
+                toast(
+                    `Detected ${
+                        generatorNames[detected]
+                    } test data`
+                );
+            }
+        );
+
+
+    tableBody.addEventListener(
+        "click",
+        (event) => {
+            const button =
+                event.target.closest(
+                    "[data-copy-row]"
+                );
+
+            if (!button) {
+                return;
+            }
+
+            const index =
+                Number(
+                    button.dataset.copyRow
+                );
+
+            const row =
+                currentRows[index];
+
+            if (row) {
+                copyText(row.value);
+            }
+        }
+    );
+
+
+    $("#qa-testdata-copy-all")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                copyText(
+                    currentRows
+                        .map(
+                            (row) =>
+                                row.value
+                        )
+                        .join("\n")
+                );
+            }
+        );
+
+
+    $("#qa-testdata-export-json")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                download(
+                    "qafox-testdata.json",
+                    JSON.stringify(
+                        {
+                            generator:
+                                activeGenerator,
+                            locale:
+                                locale(),
+                            generatedAt:
+                                new Date()
+                                    .toISOString(),
+                            synthetic:
+                                true,
+                            rows:
+                                currentRows,
+                        },
+                        null,
+                        2
+                    ),
+                    "application/json"
+                );
+            }
+        );
+
+
+    $("#qa-testdata-export-csv")
+        ?.addEventListener(
+            "click",
+            () => {
+                if (!currentRows.length) {
+                    toast(
+                        "Generate data first"
+                    );
+
+                    return;
+                }
+
+                download(
+                    "qafox-testdata.csv",
+                    asCsv(),
+                    "text/csv;charset=utf-8"
+                );
+            }
+        );
+
+
+    buildRows();
+})();
+
+/* ==========================================================
+   PATCH-QAFOX-TOOLS-002
+   LOCAL SEMANTIC QA INTELLIGENCE
+   ========================================================== */
+
+(() => {
+    "use strict";
+
+    const byId = (id) =>
+        document.getElementById(id);
+
+    if (!byId("qa-testdata-prompt")) {
+        return;
+    }
+
+
+    /* ------------------------------------------------------
+       DOMAIN INTELLIGENCE
+       ------------------------------------------------------ */
+
+    const domainKnowledge = {
+
+        ecommerce: {
+            label: "E-commerce",
+            keywords: [
+                "cart",
+                "checkout",
+                "product",
+                "order",
+                "coupon",
+                "discount",
+                "inventory",
+                "shipping",
+                "delivery",
+                "refund",
+                "ecommerce",
+                "e-commerce",
+            ],
+            fields: [
+                "customer_id",
+                "product_id",
+                "quantity",
+                "price",
+                "discount",
+                "shipping_address",
+                "order_id",
+            ],
+        },
+
+        banking: {
+            label: "Banking / Finance",
+            keywords: [
+                "bank",
+                "account",
+                "beneficiary",
+                "transfer",
+                "loan",
+                "ifsc",
+                "balance",
+                "finance",
+                "deposit",
+                "withdraw",
+            ],
+            fields: [
+                "customer_id",
+                "account_number",
+                "beneficiary",
+                "amount",
+                "transaction_id",
+                "transaction_date",
+            ],
+        },
+
+        payments: {
+            label: "Payments",
+            keywords: [
+                "payment",
+                "visa",
+                "mastercard",
+                "card",
+                "upi",
+                "cvv",
+                "merchant",
+                "transaction",
+                "gateway",
+            ],
+            fields: [
+                "transaction_id",
+                "amount",
+                "currency",
+                "payment_method",
+                "merchant_id",
+                "status",
+            ],
+        },
+
+        hotel: {
+            label: "Hotel / Travel",
+            keywords: [
+                "hotel",
+                "room",
+                "booking",
+                "check-in",
+                "checkin",
+                "checkout",
+                "guest",
+                "reservation",
+                "travel",
+                "stay",
+            ],
+            fields: [
+                "guest_name",
+                "mobile",
+                "room_type",
+                "check_in",
+                "check_out",
+                "guest_count",
+                "booking_id",
+            ],
+        },
+
+        healthcare: {
+            label: "Healthcare",
+            keywords: [
+                "patient",
+                "doctor",
+                "hospital",
+                "clinic",
+                "appointment",
+                "health",
+                "medical",
+                "prescription",
+            ],
+            fields: [
+                "patient_id",
+                "patient_name",
+                "dob",
+                "appointment_date",
+                "doctor_id",
+            ],
+        },
+
+        insurance: {
+            label: "Insurance",
+            keywords: [
+                "insurance",
+                "policy",
+                "claim",
+                "premium",
+                "nominee",
+                "coverage",
+            ],
+            fields: [
+                "policy_id",
+                "customer_id",
+                "premium",
+                "coverage_amount",
+                "claim_id",
+            ],
+        },
+
+        government: {
+            label: "Government Services",
+            keywords: [
+                "government",
+                "aadhaar",
+                "passport",
+                "pan",
+                "citizen",
+                "certificate",
+                "license",
+                "licence",
+                "application number",
+            ],
+            fields: [
+                "citizen_name",
+                "application_id",
+                "dob",
+                "mobile",
+                "address",
+                "document_type",
+            ],
+        },
+
+        hr: {
+            label: "HR / Employee",
+            keywords: [
+                "employee",
+                "payroll",
+                "salary",
+                "department",
+                "manager",
+                "leave",
+                "joining",
+                "hr",
+            ],
+            fields: [
+                "employee_id",
+                "employee_name",
+                "email",
+                "department",
+                "joining_date",
+                "salary",
+            ],
+        },
+
+        crm: {
+            label: "CRM / Customer",
+            keywords: [
+                "crm",
+                "lead",
+                "customer",
+                "prospect",
+                "sales",
+                "contact",
+                "opportunity",
+            ],
+            fields: [
+                "customer_id",
+                "customer_name",
+                "email",
+                "mobile",
+                "lead_status",
+            ],
+        },
+
+        logistics: {
+            label: "Logistics",
+            keywords: [
+                "shipment",
+                "tracking",
+                "courier",
+                "warehouse",
+                "logistics",
+                "package",
+                "dispatch",
+            ],
+            fields: [
+                "tracking_id",
+                "sender",
+                "recipient",
+                "weight",
+                "destination",
+                "status",
+            ],
+        },
+
+        saas: {
+            label: "SaaS",
+            keywords: [
+                "tenant",
+                "subscription",
+                "workspace",
+                "plan",
+                "saas",
+                "organization",
+                "organisation",
+            ],
+            fields: [
+                "tenant_id",
+                "user_id",
+                "email",
+                "plan",
+                "subscription_status",
+            ],
+        },
+
+        api: {
+            label: "API / Integration",
+            keywords: [
+                "api",
+                "endpoint",
+                "request",
+                "response",
+                "json",
+                "payload",
+                "header",
+                "query parameter",
+                "integration",
+            ],
+            fields: [
+                "request_id",
+                "resource_id",
+                "payload",
+                "status",
+            ],
+        },
+
+        general: {
+            label: "General QA",
+            keywords: [],
+            fields: [
+                "name",
+                "email",
+                "mobile",
+            ],
+        },
+    };
+
+
+    /* ------------------------------------------------------
+       FIELD SEMANTICS
+       ------------------------------------------------------ */
+
+    const fieldRules = [
+
+        {
+            type: "email",
+            match: [
+                "email",
+                "e-mail",
+                "mail",
+            ],
+        },
+
+        {
+            type: "mobile",
+            match: [
+                "mobile",
+                "phone",
+                "telephone",
+                "contact_number",
+            ],
+        },
+
+        {
+            type: "name",
+            match: [
+                "name",
+                "customer_name",
+                "employee_name",
+                "patient_name",
+                "guest_name",
+                "beneficiary",
+                "sender",
+                "recipient",
+            ],
+        },
+
+        {
+            type: "date",
+            match: [
+                "date",
+                "dob",
+                "birthday",
+                "check_in",
+                "check_out",
+                "joining_date",
+                "appointment_date",
+            ],
+        },
+
+        {
+            type: "amount",
+            match: [
+                "amount",
+                "price",
+                "premium",
+                "salary",
+                "balance",
+                "coverage",
+                "total",
+                "cost",
+            ],
+        },
+
+        {
+            type: "address",
+            match: [
+                "address",
+                "destination",
+                "shipping_address",
+            ],
+        },
+
+        {
+            type: "id",
+            match: [
+                "_id",
+                "uuid",
+                "identifier",
+                "tracking",
+                "account_number",
+                "application_id",
+                "policy_id",
+                "claim_id",
+                "booking_id",
+                "transaction_id",
+                "order_id",
+            ],
+        },
+
+        {
+            type: "number",
+            match: [
+                "quantity",
+                "count",
+                "weight",
+                "age",
+            ],
+        },
+
+        {
+            type: "status",
+            match: [
+                "status",
+                "state",
+                "plan",
+                "department",
+                "currency",
+                "room_type",
+                "payment_method",
+                "document_type",
+            ],
+        },
+    ];
+
+
+    function normalize(text) {
+        return String(text || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9_ -]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
+
+    function detectDomain(prompt) {
+
+        const selected =
+            byId("qa-testdata-domain")?.value
+            || "auto";
+
+        if (
+            selected !== "auto"
+            && domainKnowledge[selected]
+        ) {
+            return {
+                key: selected,
+                score: 100,
+                source: "preset",
+            };
+        }
+
+        const text = normalize(prompt);
+
+        let best = {
+            key: "general",
+            score: 0,
+            source: "inferred",
+        };
+
+        Object.entries(domainKnowledge)
+            .forEach(([key, domain]) => {
+
+                if (key === "general") {
+                    return;
+                }
+
+                let score = 0;
+
+                domain.keywords.forEach(
+                    (keyword) => {
+
+                        if (
+                            text.includes(
+                                normalize(keyword)
+                            )
+                        ) {
+                            score += 1;
+                        }
+                    }
+                );
+
+                if (score > best.score) {
+                    best = {
+                        key,
+                        score,
+                        source: "inferred",
+                    };
+                }
+            });
+
+        return best;
+    }
+
+
+    function detectObjective(prompt) {
+        // TOOLS-004 manual testing policy:
+        // this utility generates valid functional data only.
+        return "functional";
+    }
+
+        const text = normalize(prompt);
+
+        if (
+            /security|injection|xss|malicious|attack/.test(
+                text
+            )
+        ) {
+            return "security";
+        }
+
+        if (
+            /boundary|min|max|limit|length/.test(
+                text
+            )
+        ) {
+            return "boundary";
+        }
+
+        if (
+            /invalid|negative|reject|error/.test(
+                text
+            )
+        ) {
+            return "negative";
+        }
+
+        if (
+            /unicode|localization|localisation|tamil|language/.test(
+                text
+            )
+        ) {
+            return "localization";
+        }
+
+        if (
+            /api|json|endpoint|payload|integration/.test(
+                text
+            )
+        ) {
+            return "integration";
+        }
+
+        return "functional";
+    }
+
+
+    function objectiveLabel(value) {
+
+        return {
+            functional:
+                "Functional validation",
+
+            negative:
+                "Negative testing",
+
+            boundary:
+                "Boundary testing",
+
+            security:
+                "Input security validation",
+
+            integration:
+                "API / Integration",
+
+            localization:
+                "Localization / Unicode",
+        }[value] || "Synthetic data";
+    }
+
+
+    function detectFieldType(field) {
+
+        const normalized =
+            normalize(field)
+                .replace(/\s+/g, "_");
+
+        for (const rule of fieldRules) {
+
+            if (
+                rule.match.some(
+                    (token) =>
+                        normalized.includes(token)
+                )
+            ) {
+                return rule.type;
+            }
+        }
+
+        return "text";
+    }
+
+
+    function extractPromptFields(prompt) {
+
+        const text = normalize(prompt);
+
+        const candidates = [
+            "name",
+            "first name",
+            "last name",
+            "email",
+            "mobile",
+            "phone",
+            "dob",
+            "date of birth",
+            "address",
+            "amount",
+            "price",
+            "quantity",
+            "customer id",
+            "employee id",
+            "order id",
+            "booking id",
+            "transaction id",
+            "account number",
+            "status",
+            "password",
+            "username",
+            "url",
+            "currency",
+            "room type",
+            "check in",
+            "check out",
+        ];
+
+        return candidates.filter(
+            (field) =>
+                text.includes(field)
+        );
+    }
+
+
+    function extractSchemaFields() {
+
+        const raw =
+            byId("qa-testdata-schema")
+                ?.value
+                ?.trim()
+            || "";
+
+        if (!raw) {
+            return [];
+        }
+
+        try {
+
+            const parsed =
+                JSON.parse(raw);
+
+            if (
+                parsed
+                && typeof parsed === "object"
+                && !Array.isArray(parsed)
+            ) {
+
+                if (
+                    parsed.properties
+                    && typeof parsed.properties
+                        === "object"
+                ) {
+                    return Object.keys(
+                        parsed.properties
+                    );
+                }
+
+                return Object.keys(parsed);
+            }
+
+        } catch (_) {
+            // Continue with text field parsing.
+        }
+
+        return raw
+            .split(/[,\n]/)
+            .map(
+                (field) =>
+                    field
+                        .replace(
+                            /["'{}\[\]:]/g,
+                            ""
+                        )
+                        .trim()
+            )
+            .filter(Boolean)
+            .slice(0, 30);
+    }
+
+
+    function inferFields(prompt, domainKey) {
+
+        const schemaFields =
+            extractSchemaFields();
+
+        if (schemaFields.length) {
+            return schemaFields;
+        }
+
+        const promptFields =
+            extractPromptFields(prompt);
+
+        if (promptFields.length) {
+            return promptFields;
+        }
+
+        return [
+            ...domainKnowledge[
+                domainKey
+            ].fields
+        ];
+    }
+
+
+    /* ------------------------------------------------------
+       SCENARIO DESIGN
+       ------------------------------------------------------ */
+
+    function buildScenarioPlan(
+        fields,
+        objective
+    ) {
+
+        const scenarios = [];
+
+        fields.forEach((field) => {
+
+            const type =
+                detectFieldType(field);
+
+            scenarios.push({
+                field,
+                type,
+                scenario: "Valid",
+                expected: "Accept",
+                reason:
+                    `Confirm ${field} accepts a normal valid ${type} value.`,
+            });
+
+            scenarios.push({
+                field,
+                type,
+                scenario: "Invalid",
+                expected: "Reject",
+                reason:
+                    `Confirm malformed ${field} input is rejected with clear validation.`,
+            });
+
+            scenarios.push({
+                field,
+                type,
+                scenario: "Boundary",
+                expected:
+                    "Validate boundary",
+                reason:
+                    `Exercise minimum, maximum and near-limit behavior for ${field}.`,
+            });
+
+            if (
+                objective === "security"
+                || type === "text"
+                || type === "name"
+                || type === "id"
+            ) {
+                scenarios.push({
+                    field,
+                    type,
+                    scenario: "Security",
+                    expected:
+                        "Reject / safely handle",
+                    reason:
+                        `Verify ${field} treats hostile-looking strings strictly as data.`,
+                });
+            }
+
+            if (
+                objective === "localization"
+                || type === "name"
+                || type === "address"
+                || type === "text"
+            ) {
+                scenarios.push({
+                    field,
+                    type,
+                    scenario: "Unicode",
+                    expected:
+                        "Accept if supported",
+                    reason:
+                        `Verify ${field} handles multilingual and multi-byte input correctly.`,
+                });
+            }
+
+            scenarios.push({
+                field,
+                type,
+                scenario: "Empty / Null",
+                expected:
+                    "Validate requirement",
+                reason:
+                    `Verify required/optional behavior when ${field} is empty or null.`,
+            });
+        });
+
+        return scenarios;
+    }
+
+
+    function buildIdeas(
+        fields,
+        domain,
+        objective
+    ) {
+        const ideas = [];
+
+        ideas.push(
+            "Generate realistic values matching the selected locale."
+        );
+
+        ideas.push(
+            "Keep related fields internally consistent across each record."
+        );
+
+        if (
+            fields.some(
+                (field) =>
+                    detectFieldType(field)
+                    === "email"
+            )
+        ) {
+            ideas.push(
+                "Use syntactically valid synthetic email addresses."
+            );
+        }
+
+        if (
+            fields.some(
+                (field) =>
+                    detectFieldType(field)
+                    === "mobile"
+            )
+        ) {
+            ideas.push(
+                "Use valid mobile-number formatting for the selected locale."
+            );
+        }
+
+        if (
+            fields.some(
+                (field) =>
+                    detectFieldType(field)
+                    === "date"
+            )
+        ) {
+            ideas.push(
+                "Keep date relationships valid and chronologically consistent."
+            );
+        }
+
+        if (
+            fields.some(
+                (field) =>
+                    detectFieldType(field)
+                    === "amount"
+            )
+        ) {
+            ideas.push(
+                "Generate positive functional monetary values with normal decimal precision."
+            );
+        }
+
+        if (domain.key === "hotel") {
+            ideas.push(
+                "Ensure checkout dates are later than check-in dates."
+            );
+        }
+
+        if (domain.key === "ecommerce") {
+            ideas.push(
+                "Keep quantity, unit price and total values logically consistent."
+            );
+        }
+
+        if (
+            domain.key === "payments"
+            || domain.key === "banking"
+        ) {
+            ideas.push(
+                "Use clearly synthetic non-production financial identifiers."
+            );
+        }
+
+        return [
+            ...new Set(ideas)
+        ].slice(0, 8);
+    }
+
+        if (
+            fields.some(
+                (f) =>
+                    detectFieldType(f)
+                    === "mobile"
+            )
+        ) {
+            ideas.push(
+                "Test country code, whitespace, alphabetic characters and length boundaries for mobile numbers."
+            );
+        }
+
+        if (
+            fields.some(
+                (f) =>
+                    detectFieldType(f)
+                    === "date"
+            )
+        ) {
+            ideas.push(
+                "Test impossible dates, leap-year values, future dates and timezone boundaries."
+            );
+        }
+
+        if (
+            fields.some(
+                (f) =>
+                    detectFieldType(f)
+                    === "amount"
+            )
+        ) {
+            ideas.push(
+                "Test zero, negative, maximum, precision and currency-format amount values."
+            );
+        }
+
+        if (
+            domain.key === "ecommerce"
+        ) {
+            ideas.push(
+                "Test quantity greater than stock, expired coupon, duplicate checkout and price/discount consistency."
+            );
+        }
+
+        if (
+            domain.key === "payments"
+            || domain.key === "banking"
+        ) {
+            ideas.push(
+                "Test duplicate transaction IDs, zero/negative amount, currency mismatch and retry/idempotency behavior."
+            );
+        }
+
+        if (domain.key === "hotel") {
+            ideas.push(
+                "Test checkout before check-in, zero guests, room capacity and overlapping booking dates."
+            );
+        }
+
+        if (
+            domain.key === "healthcare"
+        ) {
+            ideas.push(
+                "Test future DOB, duplicate patient identifiers and appointment date consistency."
+            );
+        }
+
+        if (
+            objective === "security"
+        ) {
+            ideas.push(
+                "Verify suspicious strings are encoded/validated and never interpreted as executable instructions."
+            );
+        }
+
+        ideas.push(
+            "Test Unicode, emoji, leading/trailing spaces and very long text where applicable."
+        );
+
+        return [
+            ...new Set(ideas)
+        ].slice(0, 8);
+    }
+
+
+    /* ------------------------------------------------------
+       UI
+       ------------------------------------------------------ */
+
+    function updateSemanticStatus(
+        domain,
+        objective,
+        fields
+    ) {
+
+        const domainNode =
+            byId("qa-detected-domain");
+
+        const intentNode =
+            byId("qa-detected-intent");
+
+        const confidenceNode =
+            byId("qa-detected-confidence");
+
+        if (domainNode) {
+            domainNode.textContent =
+                domainKnowledge[
+                    domain.key
+                ].label;
+        }
+
+        if (intentNode) {
+            intentNode.textContent =
+                objectiveLabel(objective);
+        }
+
+        if (confidenceNode) {
+
+            if (
+                domain.source
+                === "preset"
+            ) {
+                confidenceNode.textContent =
+                    "Preset";
+            } else if (
+                domain.score >= 2
+            ) {
+                confidenceNode.textContent =
+                    "High";
+            } else if (
+                domain.score === 1
+            ) {
+                confidenceNode.textContent =
+                    "Medium";
+            } else {
+                confidenceNode.textContent =
+                    fields.length
+                        ? "Field-aware"
+                        : "General";
+            }
+        }
+    }
+
+
+    function renderIdeas(ideas) {
+
+        const target =
+            byId("qa-ai-idea-list");
+
+        if (!target) {
+            return;
+        }
+
+        target.innerHTML =
+            ideas.map(
+                (idea, index) => `
+                    <article>
+                        <span>${index + 1}</span>
+                        <p>${escapeIdea(idea)}</p>
+                    </article>
+                `
+            ).join("");
+    }
+
+
+    function escapeIdea(value) {
+
+        const node =
+            document.createElement(
+                "div"
+            );
+
+        node.textContent =
+            String(value);
+
+        return node.innerHTML;
+    }
+
+
+    function analyzeSemanticPrompt() {
+
+        const prompt =
+            byId("qa-testdata-prompt")
+                ?.value
+            || "";
+
+        const domain =
+            detectDomain(prompt);
+
+        const objective =
+            detectObjective(prompt);
+
+        const fields =
+            inferFields(
+                prompt,
+                domain.key
+            );
+
+        const plan =
+            buildScenarioPlan(
+                fields,
+                objective
+            );
+
+        const ideas =
+            buildIdeas(
+                fields,
+                domain,
+                objective
+            );
+
+        updateSemanticStatus(
+            domain,
+            objective,
+            fields
+        );
+
+        renderIdeas(ideas);
+
+        window.QAFoxSemanticQA = {
+            domain,
+            objective,
+            fields,
+            plan,
+            ideas,
+        };
+
+        return window.QAFoxSemanticQA;
+    }
+
+
+    function updateSchemaSummary() {
+
+        const fields =
+            extractSchemaFields();
+
+        const node =
+            byId("qa-schema-summary");
+
+        if (!node) {
+            return;
+        }
+
+        if (!fields.length) {
+            node.textContent =
+                "No fields detected.";
+
+            return;
+        }
+
+        node.textContent =
+            `${fields.length} fields detected: `
+            + fields
+                .slice(0, 6)
+                .join(", ")
+            + (
+                fields.length > 6
+                    ? "…"
+                    : ""
+            );
+
+        analyzeSemanticPrompt();
+    }
+
+
+    byId("qa-analyze-schema")
+        ?.addEventListener(
+            "click",
+            updateSchemaSummary
+        );
+
+
+    byId("qa-refresh-ideas")
+        ?.addEventListener(
+            "click",
+            analyzeSemanticPrompt
+        );
+
+
+    byId("qa-testdata-domain")
+        ?.addEventListener(
+            "change",
+            analyzeSemanticPrompt
+        );
+
+
+    byId("qa-testdata-objective")
+        ?.addEventListener(
+            "change",
+            analyzeSemanticPrompt
+        );
+
+
+    byId("qa-testdata-prompt")
+        ?.addEventListener(
+            "input",
+            () => {
+
+                window.clearTimeout(
+                    window.__qaSemanticTimer
+                );
+
+                window.__qaSemanticTimer =
+                    window.setTimeout(
+                        analyzeSemanticPrompt,
+                        250
+                    );
+            }
+        );
+
+
+    analyzeSemanticPrompt();
+
+})();
+
+/* ==========================================================
+   PATCH-QAFOX-TOOLS-003A
+   SAVED DATASETS
+   ========================================================== */
+
+(() => {
+    "use strict";
+
+    const $id = (id) =>
+        document.getElementById(id);
+
+    if (!$id("qa-save-dataset")) {
+        return;
+    }
+
+    let activeDatasetId = null;
+
+
+    function currentDatasetRows() {
+
+        /*
+         * TOOLS-001 owns currentRows inside its module scope.
+         * The rendered table is therefore used as the
+         * persistence boundary in 003A.
+         */
+
+        const rows = [];
+
+        document
+            .querySelectorAll(
+                "#qa-testdata-results tr"
+            )
+            .forEach((tr) => {
+
+                const cells =
+                    tr.querySelectorAll("td");
+
+                if (cells.length < 6) {
+                    return;
+                }
+
+                rows.push({
+                    id:
+                        Number(
+                            cells[0]
+                                .textContent
+                                .trim()
+                        ) || (
+                            rows.length + 1
+                        ),
+
+                    scenario:
+                        cells[1]
+                            .textContent
+                            .trim(),
+
+                    type:
+                        cells[2]
+                            .textContent
+                            .trim(),
+
+                    value:
+                        cells[3]
+                            .textContent
+                            .trim(),
+
+                    expected:
+                        cells[4]
+                            .textContent
+                            .trim(),
+
+                    reason:
+                        cells[5]
+                            .textContent
+                            .trim(),
+                });
+            });
+
+        return rows;
+    }
+
+
+    function schemaPayload() {
+
+        const raw =
+            $id("qa-testdata-schema")
+                ?.value
+                ?.trim()
+            || "";
+
+        if (!raw) {
+            return {};
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (_) {
+            return {
+                raw,
+            };
+        }
+    }
+
+
+    function semanticPayload() {
+
+        const semantic =
+            window.QAFoxSemanticQA
+            || {};
+
+        return {
+            domain:
+                semantic.domain || null,
+
+            objective:
+                semantic.objective || null,
+
+            fields:
+                semantic.fields || [],
+
+            plan:
+                semantic.plan || [],
+
+            ideas:
+                semantic.ideas || [],
+        };
+    }
+
+
+    async function api(
+        url,
+        options = {}
+    ) {
+
+        const response =
+            await fetch(
+                url,
+                {
+                    credentials:
+                        "same-origin",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+
+                        "X-Requested-With":
+                            "QAFox",
+                    },
+
+                    ...options,
+                }
+            );
+
+        let payload = {};
+
+        try {
+            payload =
+                await response.json();
+        } catch (_) {
+            // Ignore malformed error bodies.
+        }
+
+        if (!response.ok) {
+            throw new Error(
+                payload.error
+                || `Request failed (${response.status})`
+            );
+        }
+
+        return payload;
+    }
+
+
+    async function saveDataset() {
+
+        const rows =
+            currentDatasetRows();
+
+        if (!rows.length) {
+            window.alert(
+                "Generate test data before saving."
+            );
+
+            return;
+        }
+
+        const name =
+            $id("qa-dataset-name")
+                ?.value
+                ?.trim()
+            || "";
+
+        if (!name) {
+            window.alert(
+                "Enter a dataset name."
+            );
+
+            return;
+        }
+
+        const semantic =
+            window.QAFoxSemanticQA
+            || {};
+
+        const domain =
+            $id("qa-testdata-domain")
+                ?.value
+            || semantic.domain?.key
+            || "general";
+
+        const objective =
+            $id("qa-testdata-objective")
+                ?.value
+            || semantic.objective
+            || "functional";
+
+        const result =
+            await api(
+                "/tools/ai-testdata/datasets/save",
+                {
+                    method: "POST",
+
+                    body: JSON.stringify({
+                        public_id:
+                            activeDatasetId,
+
+                        name,
+
+                        description:
+                            $id(
+                                "qa-testdata-prompt"
+                            )?.value
+                            || "",
+
+                        project_public_id:
+                            $id(
+                                "qa-dataset-project"
+                            )?.value
+                            || null,
+
+                        domain,
+
+                        objective,
+
+                        locale:
+                            $id(
+                                "qa-testdata-locale"
+                            )?.value
+                            || "india",
+
+                        schema:
+                            schemaPayload(),
+
+                        semantic:
+                            semanticPayload(),
+
+                        rows,
+                    }),
+                }
+            );
+
+        activeDatasetId =
+            result.dataset.public_id;
+
+        window.alert(
+            `Dataset saved successfully.\n`
+            + `Version: ${result.dataset.version}\n`
+            + `Rows: ${result.dataset.row_count}`
+        );
+
+        window.location.reload();
+    }
+
+
+    async function loadDataset(
+        publicId
+    ) {
+
+        const result =
+            await api(
+                `/tools/ai-testdata/datasets/${publicId}`
+            );
+
+        const dataset =
+            result.dataset;
+
+        activeDatasetId =
+            dataset.public_id;
+
+        if ($id("qa-dataset-name")) {
+            $id("qa-dataset-name")
+                .value =
+                dataset.name || "";
+        }
+
+        if ($id("qa-dataset-project")) {
+            $id("qa-dataset-project")
+                .value =
+                dataset.project_public_id
+                || "";
+        }
+
+        if ($id("qa-testdata-domain")) {
+            $id("qa-testdata-domain")
+                .value =
+                dataset.domain
+                || "auto";
+        }
+
+        if ($id("qa-testdata-objective")) {
+            $id("qa-testdata-objective")
+                .value =
+                dataset.objective
+                || "auto";
+        }
+
+        if ($id("qa-testdata-locale")) {
+            $id("qa-testdata-locale")
+                .value =
+                dataset.locale
+                || "india";
+        }
+
+        if ($id("qa-testdata-prompt")) {
+            $id("qa-testdata-prompt")
+                .value =
+                dataset.description
+                || "";
+        }
+
+        if ($id("qa-testdata-schema")) {
+
+            const schema =
+                dataset.schema || {};
+
+            $id("qa-testdata-schema")
+                .value =
+                Object.keys(schema).length
+                    ? JSON.stringify(
+                        schema,
+                        null,
+                        2
+                    )
+                    : "";
+        }
+
+        renderPersistedRows(
+            dataset.rows || []
+        );
+    }
+
+
+    function renderPersistedRows(
+        rows
+    ) {
+
+        const tbody =
+            $id("qa-testdata-results");
+
+        if (!tbody) {
+            return;
+        }
+
+        const esc = (value) => {
+
+            const node =
+                document.createElement(
+                    "div"
+                );
+
+            node.textContent =
+                String(value ?? "");
+
+            return node.innerHTML;
+        };
+
+        tbody.innerHTML =
+            rows.map(
+                (row, index) => `
+
+                <tr>
+                    <td>
+                        ${index + 1}
+                    </td>
+
+                    <td>
+                        <span class="qa-data-scenario">
+                            ${esc(row.scenario)}
+                        </span>
+                    </td>
+
+                    <td>
+                        <span class="qa-data-type">
+                            ${esc(row.type)}
+                        </span>
+                    </td>
+
+                    <td class="qa-data-value-cell">
+                        <code>
+                            ${esc(row.value)}
+                        </code>
+                    </td>
+
+                    <td>
+                        <span class="qa-data-expected">
+                            ${esc(row.expected)}
+                        </span>
+                    </td>
+
+                    <td class="qa-data-reason">
+                        ${esc(row.reason)}
+                    </td>
+
+                    <td>
+                        <button type="button"
+                                class="qa-data-copy"
+                                data-loaded-copy="${index}">
+                            ⧉
+                        </button>
+
+                        <button type="button"
+                                class="qa-data-regenerate"
+                                data-regenerate-row="${index}">
+                            ↻
+                        </button>
+                    </td>
+                </tr>
+
+                `
+            ).join("");
+
+        const count =
+            $id("qa-testdata-row-count");
+
+        if (count) {
+            count.textContent =
+                `${rows.length} rows`;
+        }
+
+        const summary =
+            $id(
+                "qa-testdata-result-summary"
+            );
+
+        if (summary) {
+            summary.textContent =
+                `Loaded saved dataset · ${rows.length} rows`;
+        }
+    }
+
+
+    async function deleteDataset(
+        publicId
+    ) {
+
+        if (
+            !window.confirm(
+                "Archive this saved dataset?"
+            )
+        ) {
+            return;
+        }
+
+        await api(
+            `/tools/ai-testdata/datasets/${publicId}/delete`,
+            {
+                method: "POST",
+                body: "{}",
+            }
+        );
+
+        window.location.reload();
+    }
+
+
+    function newDataset() {
+
+        activeDatasetId = null;
+
+        if ($id("qa-dataset-name")) {
+            $id("qa-dataset-name")
+                .value =
+                "QA Test Dataset";
+        }
+
+        if ($id("qa-dataset-project")) {
+            $id("qa-dataset-project")
+                .value = "";
+        }
+    }
+
+
+    $id("qa-save-dataset")
+        ?.addEventListener(
+            "click",
+            () => {
+                saveDataset().catch(
+                    (error) =>
+                        window.alert(
+                            error.message
+                        )
+                );
+            }
+        );
+
+
+    $id("qa-new-dataset")
+        ?.addEventListener(
+            "click",
+            newDataset
+        );
+
+
+    document.addEventListener(
+        "click",
+        (event) => {
+
+            const load =
+                event.target.closest(
+                    "[data-load-dataset]"
+                );
+
+            if (load) {
+                loadDataset(
+                    load.dataset
+                        .loadDataset
+                ).catch(
+                    (error) =>
+                        window.alert(
+                            error.message
+                        )
+                );
+
+                return;
+            }
+
+            const remove =
+                event.target.closest(
+                    "[data-delete-dataset]"
+                );
+
+            if (remove) {
+                deleteDataset(
+                    remove.dataset
+                        .deleteDataset
+                ).catch(
+                    (error) =>
+                        window.alert(
+                            error.message
+                        )
+                );
+
+                return;
+            }
+
+            const regenerate =
+                event.target.closest(
+                    "[data-regenerate-row]"
+                );
+
+            if (regenerate) {
+
+                /*
+                 * Regeneration stays local and does not
+                 * auto-save. User explicitly saves a new
+                 * dataset version afterward.
+                 */
+
+                const tr =
+                    regenerate.closest(
+                        "tr"
+                    );
+
+                const value =
+                    tr?.querySelector(
+                        ".qa-data-value-cell code"
+                    );
+
+                if (value) {
+                    value.textContent =
+                        `${value.textContent} · regenerated-${Date.now()
+                            .toString()
+                            .slice(-5)}`;
+                }
+            }
+        }
+    );
+
+})();
+
+/* ==========================================================
+   PATCH-QAFOX-TOOLS-003B
+   DATASET → API TEST CASE BINDING
+   ========================================================== */
+
+(() => {
+    "use strict";
+
+    const byId = (id) =>
+        document.getElementById(id);
+
+    if (!byId("qa-bind-dataset")) {
+        return;
+    }
+
+    let selectedDatasetId = null;
+
+
+    function escapeHtml(value) {
+
+        const node =
+            document.createElement("div");
+
+        node.textContent =
+            String(value ?? "");
+
+        return node.innerHTML;
+    }
+
+
+    async function requestJSON(
+        url,
+        options = {}
+    ) {
+
+        const response =
+            await fetch(
+                url,
+                {
+                    credentials:
+                        "same-origin",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+
+                        "X-Requested-With":
+                            "QAFox",
+                    },
+
+                    ...options,
+                }
+            );
+
+        let payload = {};
+
+        try {
+            payload =
+                await response.json();
+        } catch (_) {
+            // Keep generic error.
+        }
+
+        if (!response.ok) {
+            throw new Error(
+                payload.error
+                || `Request failed (${response.status})`
+            );
+        }
+
+        return payload;
+    }
+
+
+    function setStatus(message) {
+
+        const node =
+            byId("qa-binding-status");
+
+        if (node) {
+            node.textContent =
+                message;
+        }
+    }
+
+
+    async function loadCases() {
+
+        const project =
+            byId("qa-dataset-project")
+                ?.value
+            || "";
+
+        const target =
+            byId("qa-binding-case-list");
+
+        if (!target) {
+            return;
+        }
+
+        if (!project) {
+
+            target.innerHTML = `
+                <div class="qa-binding-empty">
+                    Select a project to load its
+                    generated API test cases.
+                </div>
+            `;
+
+            return;
+        }
+
+        target.innerHTML = `
+            <div class="qa-binding-empty">
+                Loading API test cases…
+            </div>
+        `;
+
+        try {
+
+            const result =
+                await requestJSON(
+                    `/tools/ai-testdata/projects/${encodeURIComponent(project)}/test-cases`
+                );
+
+            if (!result.cases.length) {
+
+                target.innerHTML = `
+                    <div class="qa-binding-empty">
+                        No generated API test cases
+                        exist for this project yet.
+                    </div>
+                `;
+
+                return;
+            }
+
+            target.innerHTML =
+                result.cases.map(
+                    (item) => `
+
+                    <label
+                        class="qa-binding-case">
+
+                        <input
+                            type="checkbox"
+                            class="qa-binding-checkbox"
+                            value="${escapeHtml(
+                                item.public_id
+                            )}">
+
+                        <span
+                            class="qa-binding-method">
+
+                            ${escapeHtml(
+                                item.method || "CASE"
+                            )}
+
+                        </span>
+
+                        <span
+                            class="qa-binding-case-info">
+
+                            <strong>
+                                ${escapeHtml(
+                                    item.title
+                                )}
+                            </strong>
+
+                            <small>
+                                ${escapeHtml(
+                                    item.path
+                                    || item.category
+                                    || ""
+                                )}
+                            </small>
+
+                        </span>
+
+                    </label>
+
+                    `
+                ).join("");
+
+        } catch (error) {
+
+            target.innerHTML = `
+                <div class="qa-binding-empty">
+                    ${escapeHtml(
+                        error.message
+                    )}
+                </div>
+            `;
+        }
+    }
+
+
+    function selectedCases() {
+
+        return [
+            ...document.querySelectorAll(
+                ".qa-binding-checkbox:checked"
+            )
+        ].map(
+            (item) =>
+                item.value
+        );
+    }
+
+
+    function inferLoadedDataset() {
+
+        /*
+         * 003A cards contain the persisted dataset ID.
+         * Clicking Load establishes which saved dataset
+         * should be attached.
+         */
+
+        document.addEventListener(
+            "click",
+            (event) => {
+
+                const load =
+                    event.target.closest(
+                        "[data-load-dataset]"
+                    );
+
+                if (load) {
+
+                    selectedDatasetId =
+                        load.dataset
+                            .loadDataset;
+
+                    setStatus(
+                        "Saved dataset loaded. "
+                        + "Select test cases to attach."
+                    );
+                }
+            },
+            true
+        );
+    }
+
+
+    async function attachDataset() {
+
+        if (!selectedDatasetId) {
+
+            window.alert(
+                "Load a saved dataset first."
+            );
+
+            return;
+        }
+
+        const project =
+            byId("qa-dataset-project")
+                ?.value
+            || "";
+
+        if (!project) {
+
+            window.alert(
+                "Select the project linked "
+                + "to this dataset."
+            );
+
+            return;
+        }
+
+        const cases =
+            selectedCases();
+
+        if (!cases.length) {
+
+            window.alert(
+                "Select at least one API test case."
+            );
+
+            return;
+        }
+
+        const result =
+            await requestJSON(
+                `/tools/ai-testdata/datasets/${encodeURIComponent(selectedDatasetId)}/bind`,
+                {
+                    method: "POST",
+
+                    body: JSON.stringify({
+                        project_public_id:
+                            project,
+
+                        test_case_public_ids:
+                            cases,
+                    }),
+                }
+            );
+
+        setStatus(
+            `${result.bound_cases.length} test case(s) `
+            + `attached · dataset v${result.dataset_version}`
+        );
+
+        window.alert(
+            "Dataset attached successfully.\n\n"
+            + `${result.bound_cases.length} API test case(s)\n`
+            + `Dataset version: ${result.dataset_version}\n`
+            + `Fingerprint: ${result.dataset_sha256.slice(0, 12)}…`
+        );
+    }
+
+
+    byId("qa-dataset-project")
+        ?.addEventListener(
+            "change",
+            loadCases
+        );
+
+
+    byId("qa-binding-select-all")
+        ?.addEventListener(
+            "click",
+            () => {
+
+                const boxes = [
+                    ...document
+                        .querySelectorAll(
+                            ".qa-binding-checkbox"
+                        )
+                ];
+
+                const shouldSelect =
+                    boxes.some(
+                        (box) =>
+                            !box.checked
+                    );
+
+                boxes.forEach(
+                    (box) => {
+                        box.checked =
+                            shouldSelect;
+                    }
+                );
+            }
+        );
+
+
+    byId("qa-bind-dataset")
+        ?.addEventListener(
+            "click",
+            () => {
+
+                attachDataset().catch(
+                    (error) =>
+                        window.alert(
+                            error.message
+                        )
+                );
+            }
+        );
+
+
+    inferLoadedDataset();
+
+    if (
+        byId("qa-dataset-project")
+            ?.value
+    ) {
+        loadCases();
+    }
+
+})();
+
+/* ==========================================================
+   PATCH-QAFOX-TOOLS-004A
+   VALID FUNCTIONAL MANUAL QA UI
+   ========================================================== */
+
+(() => {
+    "use strict";
+
+    const prompt =
+        document.getElementById(
+            "qa-testdata-prompt"
+        );
+
+    document.addEventListener(
+        "click",
+        (event) => {
+
+            const button =
+                event.target.closest(
+                    "[data-functional-prompt]"
+                );
+
+            if (
+                !button
+                || !prompt
+            ) {
+                return;
+            }
+
+            prompt.value =
+                button.dataset
+                    .functionalPrompt
+                || "";
+
+            prompt.dispatchEvent(
+                new Event(
+                    "input",
+                    {
+                        bubbles: true,
+                    }
+                )
+            );
+
+            prompt.focus();
+        }
+    );
+
+
+    /*
+     * Manual tool policy.
+     * Any old project/API integration controls left by
+     * earlier experimental patches remain inaccessible.
+     */
+
+    const binding =
+        document.getElementById(
+            "qa-dataset-binding-panel"
+        );
+
+    if (binding) {
+        binding.hidden = true;
+    }
+
+})();

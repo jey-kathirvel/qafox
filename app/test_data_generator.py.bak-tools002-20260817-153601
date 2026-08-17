@@ -1,0 +1,526 @@
+
+
+
+def render_test_data_generator() -> str:
+    """Return the standalone AI Test Data Studio markup."""
+    content = """
+<section class="qa-testdata-studio">
+
+    <div class="qa-testdata-heading">
+
+        <div>
+            <span class="qa-eyebrow">
+                QAFox TOOLS · AI-READY
+            </span>
+
+            <h1>
+                AI Test Data Generator
+            </h1>
+
+            <p>
+                Create synthetic QA datasets for manual testing,
+                exploratory testing, validation, API testing and
+                negative scenarios.
+            </p>
+        </div>
+
+        <div class="qa-testdata-heading-badge">
+            <span>✦</span>
+
+            <div>
+                <strong>AI Test Data Studio</strong>
+                <small>
+                    Deterministic foundation · AI intelligence next
+                </small>
+            </div>
+        </div>
+
+    </div>
+
+
+    <div class="qa-testdata-safety">
+
+        <span class="qa-testdata-safety-icon">
+            🛡
+        </span>
+
+        <div>
+            <strong>
+                Synthetic test data only
+            </strong>
+
+            <p>
+                Generated payment, identity and personal values are
+                designed for QA/testing. Never use them as real
+                credentials, identities or production payment data.
+            </p>
+        </div>
+
+    </div>
+
+
+    <div class="qa-testdata-layout">
+
+
+        <aside class="qa-testdata-control-panel">
+
+            <div class="qa-testdata-panel-heading">
+                <span>GENERATOR</span>
+                <h2>What do you need?</h2>
+                <p>
+                    Choose a generator or describe the testing
+                    requirement.
+                </p>
+            </div>
+
+
+            <label class="qa-testdata-prompt-label">
+                Describe your test data need
+
+                <textarea
+                    id="qa-testdata-prompt"
+                    rows="4"
+                    maxlength="1000"
+                    placeholder="Example: Generate customer registration test data with name, email, mobile and boundary cases."></textarea>
+            </label>
+
+            <button type="button"
+                    class="qa-testdata-smart-button"
+                    id="qa-testdata-smart-generate">
+                <span>✦</span>
+                Smart Generate
+            </button>
+
+            <p class="qa-testdata-ai-note">
+                TOOLS-001 uses local deterministic intelligence.
+                TOOLS-002 will connect semantic AI scenario generation.
+            </p>
+
+
+            <div class="qa-testdata-divider">
+                QUICK GENERATORS
+            </div>
+
+
+            <div class="qa-generator-grid"
+                 id="qa-generator-grid">
+
+                <button type="button"
+                        class="qa-generator-tile is-active"
+                        data-generator="person">
+                    <span>👤</span>
+                    <strong>Person</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="contact">
+                    <span>✉</span>
+                    <strong>Contact</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="address">
+                    <span>⌂</span>
+                    <strong>Address</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="payment">
+                    <span>▣</span>
+                    <strong>Payment</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="identity">
+                    <span>◎</span>
+                    <strong>Identity</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="internet">
+                    <span>⌘</span>
+                    <strong>Internet</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="datetime">
+                    <span>◷</span>
+                    <strong>Date / Time</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="number">
+                    <span>123</span>
+                    <strong>Numbers</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="text">
+                    <span>Aa</span>
+                    <strong>Text</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="api">
+                    <span>{ }</span>
+                    <strong>API JSON</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="edge">
+                    <span>⚠</span>
+                    <strong>Edge Cases</strong>
+                </button>
+
+                <button type="button"
+                        class="qa-generator-tile"
+                        data-generator="uuid">
+                    <span>#</span>
+                    <strong>IDs / UUID</strong>
+                </button>
+
+            </div>
+
+
+            <div class="qa-testdata-divider">
+                GENERATION OPTIONS
+            </div>
+
+
+            <div class="qa-testdata-form-grid">
+
+                <label>
+                    Locale
+
+                    <select id="qa-testdata-locale">
+                        <option value="india" selected>
+                            India
+                        </option>
+
+                        <option value="usa">
+                            United States
+                        </option>
+
+                        <option value="uk">
+                            United Kingdom
+                        </option>
+
+                        <option value="global">
+                            Global
+                        </option>
+                    </select>
+                </label>
+
+                <label>
+                    Rows
+
+                    <input
+                        id="qa-testdata-count"
+                        type="number"
+                        value="10"
+                        min="1"
+                        max="50">
+                </label>
+
+                <label>
+                    Seed
+
+                    <input
+                        id="qa-testdata-seed"
+                        type="text"
+                        maxlength="80"
+                        value="qafox"
+                        placeholder="qafox">
+                </label>
+
+            </div>
+
+
+            <div class="qa-testdata-modes-heading">
+                Scenario modes
+            </div>
+
+            <div class="qa-testdata-modes">
+
+                <label>
+                    <input type="checkbox"
+                           value="valid"
+                           checked
+                           data-testdata-mode>
+                    <span>✓ Valid</span>
+                </label>
+
+                <label>
+                    <input type="checkbox"
+                           value="invalid"
+                           checked
+                           data-testdata-mode>
+                    <span>× Invalid</span>
+                </label>
+
+                <label>
+                    <input type="checkbox"
+                           value="boundary"
+                           checked
+                           data-testdata-mode>
+                    <span>↔ Boundary</span>
+                </label>
+
+                <label>
+                    <input type="checkbox"
+                           value="security"
+                           data-testdata-mode>
+                    <span>🛡 Security</span>
+                </label>
+
+                <label>
+                    <input type="checkbox"
+                           value="unicode"
+                           data-testdata-mode>
+                    <span>文 Unicode</span>
+                </label>
+
+            </div>
+
+
+            <button type="button"
+                    class="primary-button qa-testdata-generate"
+                    id="qa-testdata-generate">
+                ✦ Generate Test Data
+            </button>
+
+        </aside>
+
+
+        <div class="qa-testdata-results-panel">
+
+
+            <div class="qa-testdata-results-head">
+
+                <div>
+                    <span>GENERATED DATASET</span>
+
+                    <h2 id="qa-testdata-result-title">
+                        Person Test Data
+                    </h2>
+
+                    <p id="qa-testdata-result-summary">
+                        Generate a dataset to begin.
+                    </p>
+                </div>
+
+
+                <div class="qa-testdata-result-actions">
+
+                    <button type="button"
+                            class="outline-button"
+                            id="qa-testdata-copy-all">
+                        ⧉ Copy All
+                    </button>
+
+                    <button type="button"
+                            class="outline-button"
+                            id="qa-testdata-export-json">
+                        JSON
+                    </button>
+
+                    <button type="button"
+                            class="outline-button"
+                            id="qa-testdata-export-csv">
+                        CSV
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div class="qa-testdata-insight-strip">
+
+                <span>✦</span>
+
+                <div>
+                    <strong>
+                        QA Scenario Intelligence
+                    </strong>
+
+                    <p id="qa-testdata-insight">
+                        QAFox will identify why each generated value
+                        matters to the test.
+                    </p>
+                </div>
+
+            </div>
+
+
+            <div class="qa-testdata-table-wrap">
+
+                <table class="qa-testdata-table">
+
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Scenario</th>
+                            <th>Data Type</th>
+                            <th>Generated Value</th>
+                            <th>Expected</th>
+                            <th>Why test this?</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="qa-testdata-results">
+
+                        <tr>
+                            <td colspan="7"
+                                class="qa-testdata-empty">
+
+                                <div>✦</div>
+
+                                <strong>
+                                    Ready to generate
+                                </strong>
+
+                                <span>
+                                    Choose a generator and click
+                                    Generate Test Data.
+                                </span>
+
+                            </td>
+                        </tr>
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+
+            <div class="qa-testdata-footer">
+
+                <div>
+                    <strong id="qa-testdata-row-count">
+                        0 rows
+                    </strong>
+
+                    <span>
+                        Generated locally in your browser.
+                    </span>
+                </div>
+
+                <div>
+                    <span class="qa-testdata-private-badge">
+                        🛡 No generated dataset stored
+                    </span>
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+    <section class="qa-testdata-capabilities">
+
+        <article>
+            <span>✓</span>
+
+            <div>
+                <strong>Positive Data</strong>
+
+                <p>
+                    Realistic synthetic values for standard
+                    happy-path testing.
+                </p>
+            </div>
+        </article>
+
+        <article>
+            <span>×</span>
+
+            <div>
+                <strong>Negative Data</strong>
+
+                <p>
+                    Invalid format, missing values and type
+                    mismatch scenarios.
+                </p>
+            </div>
+        </article>
+
+        <article>
+            <span>↔</span>
+
+            <div>
+                <strong>Boundary Data</strong>
+
+                <p>
+                    Minimum, maximum, empty and oversized
+                    input scenarios.
+                </p>
+            </div>
+        </article>
+
+        <article>
+            <span>🛡</span>
+
+            <div>
+                <strong>Security Inputs</strong>
+
+                <p>
+                    Harmless QA payload strings for validating
+                    application input handling.
+                </p>
+            </div>
+        </article>
+
+        <article>
+            <span>文</span>
+
+            <div>
+                <strong>Unicode Data</strong>
+
+                <p>
+                    Tamil, accented characters, emoji and
+                    multilingual input coverage.
+                </p>
+            </div>
+        </article>
+
+        <article>
+            <span>{ }</span>
+
+            <div>
+                <strong>API-ready Data</strong>
+
+                <p>
+                    JSON-friendly test objects for API and
+                    integration testing.
+                </p>
+            </div>
+        </article>
+
+    </section>
+
+</section>
+
+<script
+    src="/static/test-data-generator.js?v=tools001"
+    defer>
+</script>
+"""
+
+    return content
+

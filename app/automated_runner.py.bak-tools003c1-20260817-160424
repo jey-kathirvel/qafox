@@ -846,88 +846,6 @@ def sort_plan_cases(cases, orchestration):
     return ordered
 
 
-# ==========================================================
-# PATCH-QAFOX-TOOLS-003C
-# Immutable AI Test Data snapshot validation
-# ==========================================================
-
-def validate_qa_dataset_snapshot(snapshot):
-    """
-    Validate only the dataset frozen inside the approved
-    execution-plan snapshot.
-
-    IMPORTANT:
-    The runner never fetches the current saved dataset or
-    current dataset binding during execution.
-    """
-
-    dataset = snapshot.get(
-        "qa_dataset"
-    )
-
-    if dataset is None:
-        return
-
-    if not isinstance(
-        dataset,
-        dict,
-    ):
-        raise ValueError(
-            "Invalid qa_dataset snapshot."
-        )
-
-    required = (
-        "dataset_public_id",
-        "dataset_version",
-        "dataset_sha256",
-        "rows",
-    )
-
-    missing = [
-        key
-        for key in required
-        if key not in dataset
-    ]
-
-    if missing:
-        raise ValueError(
-            "Incomplete qa_dataset snapshot: "
-            + ", ".join(missing)
-        )
-
-    rows = dataset.get(
-        "rows"
-    )
-
-    if not isinstance(
-        rows,
-        list,
-    ):
-        raise ValueError(
-            "qa_dataset.rows must be an array."
-        )
-
-    fingerprint = str(
-        dataset.get(
-            "dataset_sha256"
-        )
-        or ""
-    )
-
-    if (
-        len(fingerprint) != 64
-        or any(
-            ch not in
-            "0123456789abcdefABCDEF"
-            for ch in fingerprint
-        )
-    ):
-        raise ValueError(
-            "Invalid qa_dataset SHA-256."
-        )
-
-
-
 def apply_runtime_substitutions(snapshot, store: RuntimeStore):
     updated = dict(snapshot)
     updated["endpoint_path"] = substitute_placeholders(
@@ -1182,11 +1100,6 @@ def execute_run(run_id: int):
             snapshot = safe_json(
                 plan_case["case_snapshot"],
                 {},
-            )
-
-            # TOOLS-003C VALIDATE FROZEN DATASET
-            validate_qa_dataset_snapshot(
-                snapshot
             )
             case_public_id = str(
                 snapshot.get("test_case_public_id") or ""
