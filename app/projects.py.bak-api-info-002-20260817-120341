@@ -765,6 +765,36 @@ def api_testing_support_page(
     This page contains no project data and performs no
     state-changing operation.
     """
+    user = current_user(request)
+
+    if not user:
+        return HTMLResponse(
+            """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+<style>
+body {
+    margin: 0;
+    padding: 24px;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif;
+    background: #ffffff;
+    color: #202431;
+}
+</style>
+</head>
+<body>
+<p>Please sign in to view QAFox API Testing guidance.</p>
+</body>
+</html>
+""",
+            status_code=401,
+        )
+
     return HTMLResponse(
         """
 <!doctype html>
@@ -2006,24 +2036,7 @@ def project_detail(
             status_code=303,
         )
 
-    def safe_count(
-        db,
-        sql: str,
-        parameters: dict,
-    ) -> int:
-        try:
-            value = db.execute(
-                text(sql),
-                parameters,
-            ).scalar()
-
-            return int(value or 0)
-
-        except Exception:
-            return 0
-
     with Session(engine) as db:
-
         project = project_for_owner(
             db,
             user.id,
@@ -2037,11 +2050,6 @@ def project_detail(
                 status_code=303,
             )
 
-        parameters = {
-            "project_id": project["id"],
-            "owner_user_id": user.id,
-        }
-
         events = (
             db.execute(
                 text(
@@ -2054,896 +2062,158 @@ def project_detail(
                     WHERE project_id = :project_id
                       AND owner_user_id = :owner_user_id
                     ORDER BY created_at DESC
-                    LIMIT 12
+                    LIMIT 20
                     """
                 ),
-                parameters,
+                {
+                    "project_id": project["id"],
+                    "owner_user_id": user.id,
+                },
             )
             .mappings()
             .all()
         )
 
-        inventory_count = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_inventory_items
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-            """,
-            parameters,
-        )
-
-        if inventory_count == 0:
-            inventory_count = safe_count(
-                db,
-                """
-                SELECT COUNT(*)
-                FROM api_inventory
-                WHERE project_id = :project_id
-                  AND owner_user_id = :owner_user_id
-                """,
-                parameters,
-            )
-
-        test_case_count = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_test_cases
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-            """,
-            parameters,
-        )
-
-        enabled_test_count = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_test_cases
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-              AND is_enabled = TRUE
-            """,
-            parameters,
-        )
-
-        config_count = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_test_configurations
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-            """,
-            parameters,
-        )
-
-        if config_count == 0:
-            config_count = safe_count(
-                db,
-                """
-                SELECT COUNT(*)
-                FROM test_configurations
-                WHERE project_id = :project_id
-                  AND owner_user_id = :owner_user_id
-                """,
-                parameters,
-            )
-
-        plan_count = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_execution_plans
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-            """,
-            parameters,
-        )
-
-        discovery_runs = safe_count(
-            db,
-            """
-            SELECT COUNT(*)
-            FROM api_discovery_runs
-            WHERE project_id = :project_id
-              AND owner_user_id = :owner_user_id
-            """,
-            parameters,
-        )
-
     event_items = "".join(
         f"""
         <li>
-            <span class="qa-activity-dot"></span>
-
+            <i>✓</i>
             <div>
-                <strong>
-                    {esc(event["event_summary"])}
-                </strong>
-
-                <small>
-                    {esc(str(event["created_at"]))}
-                </small>
+                <strong>{esc(event["event_summary"])}</strong>
+                <small>{esc(str(event["created_at"]))}</small>
             </div>
         </li>
         """
         for event in events
     )
 
-    if not event_items:
-        event_items = """
-        <li class="qa-empty-activity">
-            No project activity yet.
-        </li>
-        """
-
     sha_id = f"project-sha-{public_id}"
     discovery_csrf = csrf_token(request)
 
-    discovery_done = (
-        inventory_count > 0
-        or discovery_runs > 0
-    )
-
-    tests_done = test_case_count > 0
-    config_done = config_count > 0
-    plan_done = plan_count > 0
-
-    completed_steps = sum(
-        (
-            discovery_done,
-            tests_done,
-            config_done,
-            plan_done,
-        )
-    )
-
-    workflow_percent = int(
-        completed_steps * 100 / 4
-    )
-
-    project_status = str(
-        project["status"] or "ready"
-    ).lower()
-
-    environment = str(
-        project["environment"] or "testing"
-    ).title()
-
     content = f"""
-<section class="qa-api-workspace">
-
-    <div class="qa-project-workspace-header">
-
+<section class="project-detail-shell">
+    <div class="project-detail-heading">
         <div>
-
-            <a class="qa-project-breadcrumb"
-               href="/projects">
-                ← Projects
-            </a>
-
-            <div class="qa-project-title-row">
-
-                <div>
-                    <span class="qa-eyebrow">
-                        API TESTING WORKSPACE
-                    </span>
-
-                    <h1>
-                        {esc(project["name"])}
-                    </h1>
-
-                    <p>
-                        {
-                            esc(project["description"])
-                            if project["description"]
-                            else
-                            "Universal API discovery, Smart Data, test generation and execution."
-                        }
-                    </p>
-                </div>
-
-            </div>
-
+            <a href="/projects">← Private projects</a>
+            <h1>{esc(project["name"])}</h1>
+            <p>{esc(project["description"] or "No description")}</p>
         </div>
 
-
-        <div class="qa-project-header-actions">
-
-            <span class="qa-project-environment">
-                {esc(environment)}
-            </span>
-
+        <div class="project-detail-actions">
             {status_badge(project["status"])}
+            <a class="project-delete-link"
+               href="/projects/{esc(public_id)}/delete">
+                Delete project
+            </a>
+        </div>
+    </div>
 
-            <form method="post"
-                  action="/projects/{esc(public_id)}/api-discovery">
+    <div class="project-privacy-banner">
+        <span>🛡</span>
+        <div>
+            <strong>Private ownership enforced</strong>
+            <p>
+                This project is accessible only through your
+                authenticated QAFox account.
+            </p>
+        </div>
+    </div>
 
-                <input type="hidden"
-                       name="csrf"
-                       value="{esc(discovery_csrf)}">
+    <div class="project-detail-grid">
+        <article class="project-detail-card">
+            <span>UPLOAD</span>
+            <h2>Project file</h2>
 
-                <button class="primary-button"
-                        type="submit">
-                    ↻ Discover APIs
+            <dl>
+                <div>
+                    <dt>Original file</dt>
+                    <dd>{esc(project["original_filename"])}</dd>
+                </div>
+                <div>
+                    <dt>File type</dt>
+                    <dd>{esc(project["file_type"].upper())}</dd>
+                </div>
+                <div>
+                    <dt>Upload size</dt>
+                    <dd>{esc(human_size(project["file_size_bytes"]))}</dd>
+                </div>
+                <div>
+                    <dt>Extracted size</dt>
+                    <dd>{esc(human_size(project["extracted_size_bytes"]))}</dd>
+                </div>
+                <div>
+                    <dt>Archive entries</dt>
+                    <dd>{esc(str(project["archive_entry_count"]))}</dd>
+                </div>
+                <div>
+                    <dt>Environment</dt>
+                    <dd>{esc(project["environment"].title())}</dd>
+                </div>
+            </dl>
+
+            <a class="outline-dark-button"
+               href="/projects/{esc(public_id)}/download">
+                Download original file
+            </a>
+        </article>
+
+        <article class="project-detail-card">
+            <span>INTEGRITY</span>
+            <h2>Upload verification</h2>
+
+            <p>{esc(project["status_message"])}</p>
+
+            <label>SHA-256 fingerprint</label>
+
+            <div class="copy-value-row project-hash">
+                <code id="{esc(sha_id)}">
+                    {esc(project["sha256"])}
+                </code>
+
+                <button type="button"
+                        class="copy-button"
+                        data-copy-target="#{esc(sha_id)}">
+                    ⧉ Copy
                 </button>
-
-            </form>
-
-        </div>
-
-    </div>
-
-
-    <nav class="qa-project-tabs"
-         aria-label="API testing workspace">
-
-        <a class="qa-project-tab is-active"
-           href="/projects/{esc(public_id)}">
-            <span>⌂</span>
-            Overview
-        </a>
-
-        <a class="qa-project-tab"
-           href="/projects/{esc(public_id)}/api-inventory">
-            <span>▦</span>
-            API Inventory
-
-            <small>
-                {inventory_count}
-            </small>
-        </a>
-
-        <a class="qa-project-tab"
-           href="/projects/{esc(public_id)}/smart-data">
-            <span>✦</span>
-            Smart Data
-        </a>
-
-        <a class="qa-project-tab"
-           href="/projects/{esc(public_id)}/test-cases">
-            <span>▤</span>
-            Test Cases
-
-            <small>
-                {test_case_count}
-            </small>
-        </a>
-
-        <a class="qa-project-tab"
-           href="/projects/{esc(public_id)}/test-config">
-            <span>⚙</span>
-            Configuration
-
-            <small>
-                {config_count}
-            </small>
-        </a>
-
-        <a class="qa-project-tab"
-           href="/projects/{esc(public_id)}/execution-plans/new">
-            <span>▶</span>
-            Execution Plan
-
-            <small>
-                {plan_count}
-            </small>
-        </a>
-
-    </nav>
-
-
-    <div class="qa-project-kpis">
-
-        <article>
-            <span class="qa-project-kpi-icon purple">
-                ▦
-            </span>
-
-            <div>
-                <small>API Endpoints</small>
-                <strong>
-                    {inventory_count:,}
-                </strong>
-                <span>
-                    Latest discovered inventory
-                </span>
             </div>
-        </article>
 
-
-        <article>
-            <span class="qa-project-kpi-icon blue">
-                ▤
-            </span>
-
-            <div>
-                <small>Test Cases</small>
-                <strong>
-                    {test_case_count:,}
-                </strong>
-                <span>
-                    {enabled_test_count:,} enabled
-                </span>
+            <div class="execution-warning">
+                Uploaded source has not been executed.
+                API discovery uses static source analysis only.
             </div>
-        </article>
 
+            <div class="discovery-actions">
+                <form method="post"
+                      action="/projects/{esc(public_id)}/api-discovery">
 
-        <article>
-            <span class="qa-project-kpi-icon saffron">
-                ⚙
-            </span>
+                    <input type="hidden"
+                           name="csrf"
+                           value="{esc(discovery_csrf)}">
 
-            <div>
-                <small>Configurations</small>
-                <strong>
-                    {config_count:,}
-                </strong>
-                <span>
-                    Secure target environments
-                </span>
-            </div>
-        </article>
-
-
-        <article>
-            <span class="qa-project-kpi-icon green">
-                ▶
-            </span>
-
-            <div>
-                <small>Execution Plans</small>
-                <strong>
-                    {plan_count:,}
-                </strong>
-                <span>
-                    Immutable approved plans
-                </span>
-            </div>
-        </article>
-
-    </div>
-
-
-    <div class="qa-project-content-grid">
-
-        <div class="qa-project-main-column">
-
-
-            <article class="qa-workflow-card">
-
-                <div class="qa-card-heading">
-
-                    <div>
-                        <span>
-                            API TESTING FLOW
-                        </span>
-
-                        <h2>
-                            Project readiness
-                        </h2>
-
-                        <p>
-                            Follow the workflow from discovery
-                            through approved execution.
-                        </p>
-                    </div>
-
-                    <div class="qa-workflow-percent">
-                        {workflow_percent}%
-                    </div>
-
-                </div>
-
-
-                <div class="qa-workflow-progress">
-
-                    <span style="width:{workflow_percent}%">
-                    </span>
-
-                </div>
-
-
-                <div class="qa-workflow-steps">
-
-
-                    <a href="/projects/{esc(public_id)}/api-inventory"
-                       class="qa-workflow-step {'complete' if discovery_done else 'current'}">
-
-                        <div class="qa-step-number">
-                            {'✓' if discovery_done else '1'}
-                        </div>
-
-                        <div>
-                            <strong>
-                                Discover APIs
-                            </strong>
-
-                            <small>
-                                {
-                                    f"{inventory_count} endpoints discovered"
-                                    if discovery_done
-                                    else
-                                    "Inspect uploaded source and contracts"
-                                }
-                            </small>
-                        </div>
-
-                    </a>
-
-
-                    <a href="/projects/{esc(public_id)}/smart-data"
-                       class="qa-workflow-step {'complete' if discovery_done else 'locked'}">
-
-                        <div class="qa-step-number">
-                            {'✓' if discovery_done else '2'}
-                        </div>
-
-                        <div>
-                            <strong>
-                                Review Smart Data
-                            </strong>
-
-                            <small>
-                                Schemas, constraints and prerequisites
-                            </small>
-                        </div>
-
-                    </a>
-
-
-                    <a href="/projects/{esc(public_id)}/test-cases"
-                       class="qa-workflow-step {'complete' if tests_done else ('current' if discovery_done else 'locked')}">
-
-                        <div class="qa-step-number">
-                            {'✓' if tests_done else '3'}
-                        </div>
-
-                        <div>
-                            <strong>
-                                Generate Test Cases
-                            </strong>
-
-                            <small>
-                                {
-                                    f"{test_case_count} cases available"
-                                    if tests_done
-                                    else
-                                    "Positive, negative and boundary scenarios"
-                                }
-                            </small>
-                        </div>
-
-                    </a>
-
-
-                    <a href="/projects/{esc(public_id)}/test-config"
-                       class="qa-workflow-step {'complete' if config_done else ('current' if tests_done else 'locked')}">
-
-                        <div class="qa-step-number">
-                            {'✓' if config_done else '4'}
-                        </div>
-
-                        <div>
-                            <strong>
-                                Configure Target
-                            </strong>
-
-                            <small>
-                                Base URL, authentication and safety
-                            </small>
-                        </div>
-
-                    </a>
-
-
-                    <a href="/projects/{esc(public_id)}/execution-plans/new"
-                       class="qa-workflow-step {'complete' if plan_done else ('current' if config_done and tests_done else 'locked')}">
-
-                        <div class="qa-step-number">
-                            {'✓' if plan_done else '5'}
-                        </div>
-
-                        <div>
-                            <strong>
-                                Review & Approve
-                            </strong>
-
-                            <small>
-                                Immutable one-run execution plan
-                            </small>
-                        </div>
-
-                    </a>
-
-                </div>
-
-            </article>
-
-
-            <article class="qa-project-security-card">
-
-                <div class="qa-card-heading">
-
-                    <div>
-                        <span>
-                            EXECUTION SAFETY
-                        </span>
-
-                        <h2>
-                            Protected testing workflow
-                        </h2>
-                    </div>
-
-                    <span class="qa-security-state">
-                        ● Protected
-                    </span>
-
-                </div>
-
-
-                <div class="qa-security-grid">
-
-                    <div>
-                        <strong>
-                            Uploaded source
-                        </strong>
-
-                        <span>
-                            Static inspection only
-                        </span>
-
-                        <small>
-                            Source code is never executed by QAFox.
-                        </small>
-                    </div>
-
-
-                    <div>
-                        <strong>
-                            Ownership
-                        </strong>
-
-                        <span>
-                            Owner isolated
-                        </span>
-
-                        <small>
-                            Project data is scoped to your authenticated account.
-                        </small>
-                    </div>
-
-
-                    <div>
-                        <strong>
-                            State changes
-                        </strong>
-
-                        <span>
-                            Approval required
-                        </span>
-
-                        <small>
-                            State-changing requests require explicit review.
-                        </small>
-                    </div>
-
-
-                    <div>
-                        <strong>
-                            Destructive APIs
-                        </strong>
-
-                        <span>
-                            Blocked by default
-                        </span>
-
-                        <small>
-                            Destructive operations remain protected.
-                        </small>
-                    </div>
-
-                </div>
-
-            </article>
-
-
-            <article class="qa-project-file-card">
-
-                <div class="qa-card-heading">
-
-                    <div>
-                        <span>
-                            SOURCE PROJECT
-                        </span>
-
-                        <h2>
-                            Uploaded project
-                        </h2>
-                    </div>
-
-                    <a class="outline-dark-button"
-                       href="/projects/{esc(public_id)}/download">
-                        Download original
-                    </a>
-
-                </div>
-
-
-                <div class="qa-file-meta-grid">
-
-                    <div>
-                        <small>File</small>
-                        <strong>
-                            {esc(project["original_filename"])}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <small>Type</small>
-                        <strong>
-                            {esc(project["file_type"].upper())}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <small>Upload size</small>
-                        <strong>
-                            {esc(human_size(project["file_size_bytes"]))}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <small>Extracted</small>
-                        <strong>
-                            {esc(human_size(project["extracted_size_bytes"]))}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <small>Files</small>
-                        <strong>
-                            {esc(str(project["archive_entry_count"]))}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <small>Environment</small>
-                        <strong>
-                            {esc(environment)}
-                        </strong>
-                    </div>
-
-                </div>
-
-
-                <div class="qa-project-hash">
-
-                    <div>
-                        <small>
-                            SHA-256 fingerprint
-                        </small>
-
-                        <code id="{esc(sha_id)}">
-                            {esc(project["sha256"])}
-                        </code>
-                    </div>
-
-                    <button type="button"
-                            class="copy-button"
-                            data-copy-target="#{esc(sha_id)}">
-                        ⧉ Copy
+                    <button class="primary-button"
+                            type="submit">
+                        Discover APIs
                     </button>
-
-                </div>
-
-            </article>
-
-        </div>
-
-
-        <aside class="qa-project-side-column">
-
-
-            <article class="qa-project-action-card">
-
-                <div class="qa-card-heading">
-
-                    <div>
-                        <span>
-                            QUICK ACTIONS
-                        </span>
-
-                        <h2>
-                            Continue testing
-                        </h2>
-                    </div>
-
-                </div>
-
-
-                <div class="qa-project-actions-list">
-
-                    <form method="post"
-                          action="/projects/{esc(public_id)}/api-discovery">
-
-                        <input type="hidden"
-                               name="csrf"
-                               value="{esc(discovery_csrf)}">
-
-                        <button type="submit"
-                                class="qa-project-action is-primary">
-
-                            <span>↻</span>
-
-                            <div>
-                                <strong>
-                                    Discover APIs
-                                </strong>
-
-                                <small>
-                                    Scan source and API definitions
-                                </small>
-                            </div>
-
-                            <b>›</b>
-
-                        </button>
-
-                    </form>
-
-
-                    <a class="qa-project-action"
-                       href="/projects/{esc(public_id)}/api-inventory">
-
-                        <span>▦</span>
-
-                        <div>
-                            <strong>
-                                API Inventory
-                            </strong>
-
-                            <small>
-                                Review {inventory_count} discovered endpoints
-                            </small>
-                        </div>
-
-                        <b>›</b>
-
-                    </a>
-
-
-                    <a class="qa-project-action"
-                       href="/projects/{esc(public_id)}/smart-data">
-
-                        <span>✦</span>
-
-                        <div>
-                            <strong>
-                                Smart Data
-                            </strong>
-
-                            <small>
-                                Review schemas and generated values
-                            </small>
-                        </div>
-
-                        <b>›</b>
-
-                    </a>
-
-
-                    <a class="qa-project-action"
-                       href="/projects/{esc(public_id)}/test-cases">
-
-                        <span>▤</span>
-
-                        <div>
-                            <strong>
-                                Test Cases
-                            </strong>
-
-                            <small>
-                                Generate or review test scenarios
-                            </small>
-                        </div>
-
-                        <b>›</b>
-
-                    </a>
-
-
-                    <a class="qa-project-action"
-                       href="/projects/{esc(public_id)}/test-config">
-
-                        <span>⚙</span>
-
-                        <div>
-                            <strong>
-                                Test Configuration
-                            </strong>
-
-                            <small>
-                                Target URL, auth and environment
-                            </small>
-                        </div>
-
-                        <b>›</b>
-
-                    </a>
-
-
-                    <a class="qa-project-action"
-                       href="/projects/{esc(public_id)}/execution-plans/new">
-
-                        <span>▶</span>
-
-                        <div>
-                            <strong>
-                                Execution Plan
-                            </strong>
-
-                            <small>
-                                Review and approve test execution
-                            </small>
-                        </div>
-
-                        <b>›</b>
-
-                    </a>
-
-                </div>
-
-            </article>
-
-
-            <article class="qa-project-activity-card">
-
-                <div class="qa-card-heading">
-
-                    <div>
-                        <span>
-                            ACTIVITY
-                        </span>
-
-                        <h2>
-                            Recent project activity
-                        </h2>
-                    </div>
-
-                </div>
-
-                <ul class="qa-project-activity-list">
-                    {event_items}
-                </ul>
-
-            </article>
-
-
-            <article class="qa-project-danger-card">
-
-                <strong>
-                    Project management
-                </strong>
-
-                <p>
-                    Delete removes this private project
-                    and its uploaded project files.
-                </p>
-
-                <a href="/projects/{esc(public_id)}/delete">
-                    Delete project
+                </form>
+
+                <a class="outline-dark-button"
+                   href="/projects/{esc(public_id)}/api-inventory">
+                    View latest inventory
                 </a>
 
-            </article>
-
-        </aside>
-
+                <a class="outline-dark-button"
+                   href="/projects/{esc(public_id)}/test-config">
+                    Configure API testing
+                </a>
+            </div>
+        </article>
     </div>
 
+    <article class="project-audit-card">
+        <span>AUDIT HISTORY</span>
+        <h2>Private project activity</h2>
+        <ul>{event_items}</ul>
+    </article>
 </section>
 """
 
@@ -2953,6 +2223,7 @@ def project_detail(
         request,
         public=False,
     )
+
 
 @router.get("/projects/{public_id}/delete")
 def delete_project_page(

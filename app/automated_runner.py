@@ -2258,14 +2258,435 @@ def run_report(
             f"<td>{esc(item['assertion_summary'] or '')}</td></tr>"
             for item in results
         ) or "<tr><td colspan='5'>No results</td></tr>"
+        total = int(run["total_count"] or 0)
+        completed = int(run["completed_count"] or 0)
+        passed = int(run["passed_count"] or 0)
+        failed = int(run["failed_count"] or 0)
+        errors = int(run["error_count"] or 0)
+        skipped = int(run["skipped_count"] or 0)
+
+        pass_rate = (
+            round((passed * 100) / completed, 1)
+            if completed
+            else 0
+        )
+
         return HTMLResponse(
             f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>QAFox run report</title></head>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+
+<title>QAFox API QA Report</title>
+
+<style>
+:root {{
+    color-scheme: light;
+}}
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+    padding: 30px;
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    color: #18243b;
+
+    background:
+        radial-gradient(
+            circle at 8% 4%,
+            rgba(255,174,61,.13),
+            transparent 24rem
+        ),
+        radial-gradient(
+            circle at 92% 6%,
+            rgba(81,126,245,.11),
+            transparent 28rem
+        ),
+        linear-gradient(
+            135deg,
+            #f5f7fb,
+            #edf2f8
+        );
+}}
+
+.report {{
+    max-width: 1320px;
+    margin: 0 auto;
+}}
+
+.hero {{
+    padding: 25px;
+
+    border: 1px solid rgba(255,255,255,.85);
+    border-radius: 22px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(255,255,255,.90),
+            rgba(255,255,255,.68)
+        );
+
+    box-shadow:
+        0 18px 48px rgba(35,55,85,.09);
+}}
+
+.eyebrow {{
+    color: #c36200;
+
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .12em;
+}}
+
+h1 {{
+    margin: 7px 0 5px;
+
+    color: #0f1b33;
+
+    font-size: clamp(28px,4vw,42px);
+    letter-spacing: -.03em;
+}}
+
+.hero p {{
+    margin: 0;
+
+    color: #627086;
+}}
+
+.run-id {{
+    margin-top: 13px;
+
+    padding: 9px 11px;
+
+    display: inline-block;
+
+    border-radius: 9px;
+
+    color: #536178;
+
+    background: rgba(244,247,251,.80);
+
+    font-family:
+        Consolas,
+        "SFMono-Regular",
+        monospace;
+
+    font-size: 12px;
+}}
+
+.grid {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(6,minmax(0,1fr));
+
+    gap: 11px;
+
+    margin: 14px 0;
+}}
+
+.metric {{
+    padding: 16px;
+
+    border: 1px solid rgba(255,255,255,.82);
+    border-radius: 16px;
+
+    background:
+        rgba(255,255,255,.74);
+
+    box-shadow:
+        0 10px 26px rgba(35,55,85,.065);
+}}
+
+.metric span {{
+    display: block;
+
+    color: #66748a;
+
+    font-size: 11px;
+    font-weight: 700;
+}}
+
+.metric strong {{
+    display: block;
+
+    margin-top: 7px;
+
+    color: #0f1b33;
+
+    font-size: 27px;
+}}
+
+.metric.pass strong {{
+    color: #087647;
+}}
+
+.metric.fail strong {{
+    color: #c93434;
+}}
+
+.metric.error strong {{
+    color: #674dc5;
+}}
+
+.metric.skip strong {{
+    color: #a76700;
+}}
+
+.summary {{
+    margin-bottom: 14px;
+
+    padding: 18px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+
+    border: 1px solid rgba(255,255,255,.82);
+    border-radius: 18px;
+
+    background:
+        rgba(255,255,255,.72);
+}}
+
+.summary strong {{
+    color: #0f1b33;
+}}
+
+.summary span {{
+    color: #68758a;
+    font-size: 13px;
+}}
+
+.pass-rate {{
+    min-width: 95px;
+
+    text-align: right;
+
+    color: #087647 !important;
+
+    font-size: 25px !important;
+    font-weight: 900;
+}}
+
+.table-wrap {{
+    overflow-x: auto;
+
+    border: 1px solid rgba(255,255,255,.82);
+    border-radius: 18px;
+
+    background:
+        rgba(255,255,255,.75);
+
+    box-shadow:
+        0 14px 34px rgba(35,55,85,.07);
+}}
+
+table {{
+    width: 100%;
+
+    min-width: 900px;
+
+    border-collapse: collapse;
+}}
+
+th {{
+    padding: 12px 13px;
+
+    color: #4e5b70;
+
+    background: rgba(244,247,251,.96);
+
+    border-bottom:
+        1px solid rgba(111,132,163,.15);
+
+    text-align: left;
+
+    font-size: 10px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}}
+
+td {{
+    padding: 12px 13px;
+
+    border-bottom:
+        1px solid rgba(111,132,163,.10);
+
+    color: #344259;
+
+    font-size: 12px;
+}}
+
+tr:last-child td {{
+    border-bottom: 0;
+}}
+
+tbody tr:hover {{
+    background:
+        rgba(255,248,236,.64);
+}}
+
+.footer {{
+    margin-top: 16px;
+
+    color: #778398;
+
+    text-align: center;
+
+    font-size: 11px;
+}}
+
+@media (max-width: 900px) {{
+    body {{
+        padding: 14px;
+    }}
+
+    .grid {{
+        grid-template-columns:
+            repeat(2,minmax(0,1fr));
+    }}
+
+    .summary {{
+        align-items: flex-start;
+        flex-direction: column;
+    }}
+
+    .pass-rate {{
+        text-align: left;
+    }}
+}}
+</style>
+</head>
+
 <body>
-<h1>Run {esc(run["public_id"])}</h1>
-<p>Status {esc(run["status"])} · passed {esc(str(run["passed_count"]))} · failed {esc(str(run["failed_count"]))} · error {esc(str(run["error_count"]))} · skipped {esc(str(run["skipped_count"]))}</p>
-<table border="1" cellpadding="6"><thead><tr><th>#</th><th>Request</th><th>Result</th><th>HTTP</th><th>Root cause / assertions</th></tr></thead><tbody>{rows}</tbody></table>
-</body></html>
+
+<main class="report">
+
+<section class="hero">
+
+    <span class="eyebrow">
+        QAFox · UNIVERSAL API TESTING
+    </span>
+
+    <h1>
+        API QA Execution Report
+    </h1>
+
+    <p>
+        Deterministic test execution results generated by QAFox.
+    </p>
+
+    <code class="run-id">
+        Run {esc(run["public_id"])}
+    </code>
+
+</section>
+
+
+<section class="grid">
+
+    <article class="metric">
+        <span>Total</span>
+        <strong>{esc(str(total))}</strong>
+    </article>
+
+    <article class="metric">
+        <span>Completed</span>
+        <strong>{esc(str(completed))}</strong>
+    </article>
+
+    <article class="metric pass">
+        <span>Passed</span>
+        <strong>{esc(str(passed))}</strong>
+    </article>
+
+    <article class="metric fail">
+        <span>Failed</span>
+        <strong>{esc(str(failed))}</strong>
+    </article>
+
+    <article class="metric error">
+        <span>Errors</span>
+        <strong>{esc(str(errors))}</strong>
+    </article>
+
+    <article class="metric skip">
+        <span>Skipped</span>
+        <strong>{esc(str(skipped))}</strong>
+    </article>
+
+</section>
+
+
+<section class="summary">
+
+    <div>
+        <strong>
+            Execution status:
+            {esc(str(run["status"]).title())}
+        </strong>
+
+        <br>
+
+        <span>
+            Assertions, root-cause summaries and HTTP results
+            are shown below.
+        </span>
+    </div>
+
+    <span class="pass-rate">
+        {pass_rate:.1f}% pass
+    </span>
+
+</section>
+
+
+<div class="table-wrap">
+
+<table>
+
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Request</th>
+            <th>Result</th>
+            <th>HTTP</th>
+            <th>Root cause / assertions</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {rows}
+    </tbody>
+
+</table>
+
+</div>
+
+
+<div class="footer">
+    Generated by QAFox · API Testing Module · Secrets masked by runner policy
+</div>
+
+</main>
+
+</body>
+</html>
 """
         )
 

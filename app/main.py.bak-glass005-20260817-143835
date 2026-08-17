@@ -490,8 +490,8 @@ def layout(
 <link rel="apple-touch-icon"
       sizes="192x192"
       href="/static/icons/qafox-192.png">
-<link rel="stylesheet" href="/static/app.css?v=glass008">
-<script src="/static/app.js?v=glass008" defer></script>
+<link rel="stylesheet" href="/static/app.css?v=glass004">
+<script src="/static/app.js?v=glass004" defer></script>
 </head>
 <body class="{body_class}">
 {sidebar}

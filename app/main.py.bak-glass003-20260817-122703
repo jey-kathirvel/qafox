@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pwdlib import PasswordHash
-from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, or_, text
+from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -490,8 +490,8 @@ def layout(
 <link rel="apple-touch-icon"
       sizes="192x192"
       href="/static/icons/qafox-192.png">
-<link rel="stylesheet" href="/static/app.css?v=glass008">
-<script src="/static/app.js?v=glass008" defer></script>
+<link rel="stylesheet" href="/static/app.css?v=glass002">
+<script src="/static/app.js?v=glass002" defer></script>
 </head>
 <body class="{body_class}">
 {sidebar}
@@ -523,36 +523,6 @@ def layout(
     </nav>
     <div class="topbar-end">
         {account}
-        <div class="qa-font-controls"
-             role="group"
-             aria-label="Font size">
-
-            <button type="button"
-                    class="qa-font-button"
-                    data-font-size="compact"
-                    aria-label="Decrease font size"
-                    title="Decrease font size">
-                A−
-            </button>
-
-            <button type="button"
-                    class="qa-font-button is-active"
-                    data-font-size="normal"
-                    aria-label="Normal font size"
-                    title="Normal font size">
-                A
-            </button>
-
-            <button type="button"
-                    class="qa-font-button"
-                    data-font-size="large"
-                    aria-label="Increase font size"
-                    title="Increase font size">
-                A+
-            </button>
-
-        </div>
-
         <button type="button"
                 class="pwa-install-button"
                 data-pwa-install
@@ -1679,741 +1649,67 @@ def dashboard(request: Request):
     if not user:
         return RedirectResponse("/login", status_code=303)
 
-    metrics = {
-        "projects": 0,
-        "apis": 0,
-        "test_cases": 0,
-        "executions": 0,
-        "passed": 0,
-        "failed": 0,
-        "skipped": 0,
-        "errors": 0,
-        "avg_duration_ms": None,
-    }
-
-    recent_runs = []
-
-    def scalar_safe(db, sql: str, params: dict) -> int:
-        try:
-            value = db.execute(
-                text(sql),
-                params,
-            ).scalar()
-
-            return int(value or 0)
-        except Exception:
-            return 0
-
-    def avg_safe(db, sql: str, params: dict):
-        try:
-            value = db.execute(
-                text(sql),
-                params,
-            ).scalar()
-
-            return round(float(value), 1) if value is not None else None
-        except Exception:
-            return None
-
-    with Session(engine) as db:
-
-        owner = {"owner_id": user.id}
-
-        metrics["projects"] = scalar_safe(
-            db,
-            """
-            SELECT COUNT(*)
-              FROM projects
-             WHERE owner_id = :owner_id
-               AND COALESCE(is_deleted, false) = false
-            """,
-            owner,
-        )
-
-        # API inventory names differ across historical migrations,
-        # so use safe fallbacks without breaking the dashboard.
-        for sql in (
-            """
-            SELECT COUNT(*)
-              FROM api_inventory
-             WHERE owner_id = :owner_id
-            """,
-            """
-            SELECT COUNT(*)
-              FROM api_inventory_items ai
-              JOIN projects p ON p.id = ai.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-            """
-            SELECT COUNT(*)
-              FROM discovered_apis a
-              JOIN projects p ON p.id = a.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-        ):
-            value = scalar_safe(db, sql, owner)
-            if value:
-                metrics["apis"] = value
-                break
-
-        for sql in (
-            """
-            SELECT COUNT(*)
-              FROM api_test_cases tc
-              JOIN projects p ON p.id = tc.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-            """
-            SELECT COUNT(*)
-              FROM test_cases tc
-              JOIN projects p ON p.id = tc.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-        ):
-            value = scalar_safe(db, sql, owner)
-            if value:
-                metrics["test_cases"] = value
-                break
-
-        # Execution summary.
-        for sql in (
-            """
-            SELECT COUNT(*)
-              FROM api_test_runs r
-              JOIN projects p ON p.id = r.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-            """
-            SELECT COUNT(*)
-              FROM execution_runs r
-              JOIN projects p ON p.id = r.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-            """,
-        ):
-            value = scalar_safe(db, sql, owner)
-            if value:
-                metrics["executions"] = value
-                break
-
-        # Result counts.
-        result_sources = [
-            (
-                "api_test_results",
-                "run_id",
-                "api_test_runs",
-            ),
-            (
-                "execution_results",
-                "run_id",
-                "execution_runs",
-            ),
-        ]
-
-        for result_table, fk, run_table in result_sources:
-            status_counts = {}
-
-            try:
-                rows = db.execute(
-                    text(
-                        f"""
-                        SELECT LOWER(COALESCE(r.status, 'unknown')) AS status,
-                               COUNT(*) AS count
-                          FROM {result_table} r
-                          JOIN {run_table} run
-                            ON run.id = r.{fk}
-                          JOIN projects p
-                            ON p.id = run.project_id
-                         WHERE p.owner_id = :owner_id
-                           AND COALESCE(p.is_deleted, false) = false
-                         GROUP BY LOWER(COALESCE(r.status, 'unknown'))
-                        """
-                    ),
-                    owner,
-                ).mappings().all()
-
-                status_counts = {
-                    str(row["status"]): int(row["count"])
-                    for row in rows
-                }
-
-            except Exception:
-                continue
-
-            if status_counts:
-                metrics["passed"] = (
-                    status_counts.get("passed", 0)
-                    + status_counts.get("pass", 0)
-                )
-
-                metrics["failed"] = (
-                    status_counts.get("failed", 0)
-                    + status_counts.get("fail", 0)
-                )
-
-                metrics["skipped"] = (
-                    status_counts.get("skipped", 0)
-                    + status_counts.get("skip", 0)
-                    + status_counts.get("blocked", 0)
-                )
-
-                metrics["errors"] = (
-                    status_counts.get("error", 0)
-                    + status_counts.get("errored", 0)
-                )
-
-                break
-
-        # Average request/result duration.
-        duration_queries = [
-            """
-            SELECT AVG(r.duration_ms)
-              FROM api_test_results r
-              JOIN api_test_runs run ON run.id = r.run_id
-              JOIN projects p ON p.id = run.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-               AND r.duration_ms IS NOT NULL
-            """,
-            """
-            SELECT AVG(r.duration_ms)
-              FROM execution_results r
-              JOIN execution_runs run ON run.id = r.run_id
-              JOIN projects p ON p.id = run.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-               AND r.duration_ms IS NOT NULL
-            """,
-        ]
-
-        for sql in duration_queries:
-            value = avg_safe(db, sql, owner)
-            if value is not None:
-                metrics["avg_duration_ms"] = value
-                break
-
-        # Recent runs, with safe fallback between historical schemas.
-        recent_queries = [
-            """
-            SELECT r.id,
-                   p.name AS project_name,
-                   COALESCE(r.environment_name, 'Default') AS environment,
-                   COALESCE(r.status, 'unknown') AS status,
-                   r.created_at,
-                   r.completed_at
-              FROM api_test_runs r
-              JOIN projects p ON p.id = r.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-             ORDER BY r.created_at DESC
-             LIMIT 6
-            """,
-            """
-            SELECT r.id,
-                   p.name AS project_name,
-                   COALESCE(r.environment_name, 'Default') AS environment,
-                   COALESCE(r.status, 'unknown') AS status,
-                   r.created_at,
-                   r.completed_at
-              FROM execution_runs r
-              JOIN projects p ON p.id = r.project_id
-             WHERE p.owner_id = :owner_id
-               AND COALESCE(p.is_deleted, false) = false
-             ORDER BY r.created_at DESC
-             LIMIT 6
-            """,
-        ]
-
-        for sql in recent_queries:
-            try:
-                recent_runs = db.execute(
-                    text(sql),
-                    owner,
-                ).mappings().all()
-
-                if recent_runs:
-                    break
-            except Exception:
-                continue
-
-    total_results = (
-        metrics["passed"]
-        + metrics["failed"]
-        + metrics["skipped"]
-        + metrics["errors"]
-    )
-
-    pass_rate = (
-        round(metrics["passed"] * 100 / total_results, 1)
-        if total_results else 0
-    )
-
-    api_coverage = (
-        round(
-            min(metrics["apis"], metrics["test_cases"])
-            * 100
-            / metrics["apis"],
-            1,
-        )
-        if metrics["apis"]
-        else 0
-    )
-
-    def fmt(value):
-        return f"{int(value):,}"
-
-    def duration_text(value):
-        if value is None:
-            return "—"
-        if value < 1000:
-            return f"{value:.0f} ms"
-        return f"{value / 1000:.2f} s"
-
-    def status_class(status):
-        status = str(status or "").lower()
-
-        if status in {"passed", "pass", "completed", "success"}:
-            return "passed"
-
-        if status in {"failed", "fail"}:
-            return "failed"
-
-        if status in {"skipped", "skip", "blocked"}:
-            return "skipped"
-
-        if status in {"error", "errored"}:
-            return "error"
-
-        return "neutral"
-
-    recent_rows = ""
-
-    for run in recent_runs:
-
-        created = run.get("created_at")
-
-        if created:
-            try:
-                created_display = created.strftime(
-                    "%d %b %Y, %I:%M %p"
-                )
-            except Exception:
-                created_display = esc(str(created))
-        else:
-            created_display = "—"
-
-        run_status = str(
-            run.get("status") or "unknown"
-        )
-
-        recent_rows += f"""
-        <tr>
-            <td>
-                <span class="qa-run-id">
-                    #RUN-{esc(str(run.get('id', '—')))}
-                </span>
-            </td>
-            <td>{esc(str(run.get('project_name') or '—'))}</td>
-            <td>{esc(str(run.get('environment') or 'Default'))}</td>
-            <td>
-                <span class="qa-status-badge {status_class(run_status)}">
-                    {esc(run_status.title())}
-                </span>
-            </td>
-            <td>{created_display}</td>
-        </tr>
-        """
-
-    if not recent_rows:
-        recent_rows = """
-        <tr>
-            <td colspan="5">
-                <div class="qa-empty-table">
-                    <strong>No executions yet</strong>
-                    <span>
-                        Create a project and run an approved API test plan.
-                    </span>
-                </div>
-            </td>
-        </tr>
-        """
-
     content = f"""
-<section class="qa-enterprise-dashboard">
-
-    <div class="qa-dashboard-heading">
-
-        <div>
-            <span class="qa-eyebrow">
-                UNIVERSAL API TESTING
-            </span>
-
-            <h1>Dashboard</h1>
-
-            <p>
-                Overview of your QAFox quality engineering workspace.
-            </p>
-        </div>
-
-        <div class="qa-dashboard-heading-actions">
-
-            <a href="/projects"
-               class="outline-button">
-                View Projects
-            </a>
-
-            <a href="/projects/new"
-               class="primary-button">
-                + New Project
-            </a>
-
-        </div>
-
+<section class="dashboard-header">
+    <div>
+        <span>PRIVATE QUALITY ENGINEERING WORKSPACE</span>
+        <h1>Good to see you, {esc(user.full_name)}! 👋</h1>
+        <p>
+            API Testing is your first active QAFox module.
+        </p>
     </div>
+    <a class="primary-button" href="/projects/new">
+        + New project
+    </a>
+</section>
 
+<section class="dashboard-grid">
+    <article class="welcome-panel">
+        <span>PHASE 1 · API TESTING</span>
+        <h2>Upload. Discover. Test. Report.</h2>
+        <p>
+            Bring a ZIP, TAR, project folder, OpenAPI document or
+            Postman collection. Qubi will discover the APIs and
+            prepare a detailed test inventory.
+        </p>
+        <a class="primary-button" href="/projects/new">
+            Upload first project
+        </a>
+        <div class="dashboard-qubi">🦊</div>
+    </article>
 
-    <div class="qa-kpi-grid">
+    <article class="privacy-panel">
+        <span>🛡</span>
+        <h3>Your workspace is private</h3>
+        <p>
+            Project access is bound to your authenticated account.
+            Cross-user project visibility is prohibited.
+        </p>
+    </article>
+</section>
 
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon purple">▦</div>
-
-            <div>
-                <span>API Endpoints</span>
-                <strong>{fmt(metrics["apis"])}</strong>
-                <small>Discovered across your projects</small>
-            </div>
+<section class="dashboard-tools">
+    <h2>Your quality toolkit</h2>
+    <div class="cards">
+        <article class="active-card">
+            <i>↗</i><b>Active</b>
+            <h3>API Testing</h3>
+            <p>Discovery, auditing, execution and reports.</p>
         </article>
-
-
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon blue">▤</div>
-
-            <div>
-                <span>Test Cases</span>
-                <strong>{fmt(metrics["test_cases"])}</strong>
-                <small>Generated and available</small>
-            </div>
+        <article>
+            <i>✓</i><b>Coming next</b>
+            <h3>Manual Testing</h3>
+            <p>Cases, plans, evidence and traceability.</p>
         </article>
-
-
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon saffron">▶</div>
-
-            <div>
-                <span>Executions</span>
-                <strong>{fmt(metrics["executions"])}</strong>
-                <small>Approved test runs</small>
-            </div>
+        <article>
+            <i>⚙</i><b>Roadmap</b>
+            <h3>Automation Testing</h3>
+            <p>Web and mobile automated test suites.</p>
         </article>
-
-
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon green">✓</div>
-
-            <div>
-                <span>Passed</span>
-                <strong>{fmt(metrics["passed"])}</strong>
-                <small>{pass_rate:.1f}% pass rate</small>
-            </div>
-        </article>
-
-
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon red">×</div>
-
-            <div>
-                <span>Failed</span>
-                <strong>{fmt(metrics["failed"])}</strong>
-                <small>
-                    {fmt(metrics["errors"])} execution errors
-                </small>
-            </div>
-        </article>
-
-
-        <article class="qa-kpi-card">
-            <div class="qa-kpi-icon saffron">ϟ</div>
-
-            <div>
-                <span>Avg. Response Time</span>
-                <strong>
-                    {duration_text(metrics["avg_duration_ms"])}
-                </strong>
-                <small>Across available results</small>
-            </div>
-        </article>
-
     </div>
-
-
-    <div class="qa-dashboard-middle">
-
-        <article class="qa-glass-widget qa-result-overview">
-
-            <div class="qa-widget-heading">
-                <div>
-                    <h2>Test Results</h2>
-                    <p>Current execution result distribution</p>
-                </div>
-            </div>
-
-            <div class="qa-result-overview-body">
-
-                <div class="qa-donut-shell"
-                     style="--pass:{pass_rate};">
-
-                    <div class="qa-donut">
-
-                        <div class="qa-donut-center">
-                            <strong>{fmt(total_results)}</strong>
-                            <span>Total Results</span>
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-                <div class="qa-result-legend">
-
-                    <div>
-                        <span class="qa-legend-dot passed"></span>
-                        <strong>Passed</strong>
-                        <small>{fmt(metrics["passed"])}</small>
-                    </div>
-
-                    <div>
-                        <span class="qa-legend-dot failed"></span>
-                        <strong>Failed</strong>
-                        <small>{fmt(metrics["failed"])}</small>
-                    </div>
-
-                    <div>
-                        <span class="qa-legend-dot skipped"></span>
-                        <strong>Skipped</strong>
-                        <small>{fmt(metrics["skipped"])}</small>
-                    </div>
-
-                    <div>
-                        <span class="qa-legend-dot error"></span>
-                        <strong>Errors</strong>
-                        <small>{fmt(metrics["errors"])}</small>
-                    </div>
-
-                </div>
-
-            </div>
-
-        </article>
-
-
-        <article class="qa-glass-widget qa-coverage-widget">
-
-            <div class="qa-widget-heading">
-                <div>
-                    <h2>API Coverage</h2>
-                    <p>Endpoints represented by generated tests</p>
-                </div>
-            </div>
-
-            <div class="qa-coverage-body">
-
-                <div class="qa-coverage-gauge"
-                     style="--coverage:{api_coverage};">
-
-                    <div>
-                        <strong>{api_coverage:.0f}%</strong>
-                        <span>
-                            {"Excellent" if api_coverage >= 90 else
-                             "Good" if api_coverage >= 70 else
-                             "Growing" if api_coverage > 0 else
-                             "No data yet"}
-                        </span>
-                    </div>
-
-                </div>
-
-                <p>
-                    {fmt(metrics["apis"])} APIs discovered ·
-                    {fmt(metrics["test_cases"])} test cases available
-                </p>
-
-            </div>
-
-        </article>
-
-
-        <article class="qa-glass-widget qa-project-widget">
-
-            <div class="qa-widget-heading">
-                <div>
-                    <h2>Workspace</h2>
-                    <p>Your current QAFox footprint</p>
-                </div>
-            </div>
-
-            <div class="qa-workspace-summary">
-
-                <div>
-                    <span>Projects</span>
-                    <strong>{fmt(metrics["projects"])}</strong>
-                </div>
-
-                <div>
-                    <span>API endpoints</span>
-                    <strong>{fmt(metrics["apis"])}</strong>
-                </div>
-
-                <div>
-                    <span>Tests</span>
-                    <strong>{fmt(metrics["test_cases"])}</strong>
-                </div>
-
-                <div>
-                    <span>Runs</span>
-                    <strong>{fmt(metrics["executions"])}</strong>
-                </div>
-
-            </div>
-
-        </article>
-
-    </div>
-
-
-    <div class="qa-dashboard-bottom">
-
-        <article class="qa-glass-widget qa-recent-widget">
-
-            <div class="qa-widget-heading">
-
-                <div>
-                    <h2>Recent Executions</h2>
-                    <p>Latest test activity across your projects</p>
-                </div>
-
-            </div>
-
-            <div class="qa-table-wrap">
-
-                <table class="qa-dashboard-table">
-
-                    <thead>
-                        <tr>
-                            <th>Run</th>
-                            <th>Project</th>
-                            <th>Environment</th>
-                            <th>Status</th>
-                            <th>Executed</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        {recent_rows}
-                    </tbody>
-
-                </table>
-
-            </div>
-
-        </article>
-
-
-        <article class="qa-glass-widget qa-actions-widget">
-
-            <div class="qa-widget-heading">
-                <div>
-                    <h2>Quick Actions</h2>
-                    <p>Continue your API testing workflow</p>
-                </div>
-            </div>
-
-
-            <div class="qa-quick-actions">
-
-                <a href="/projects/new"
-                   class="qa-quick-action is-primary">
-
-                    <span>＋</span>
-
-                    <div>
-                        <strong>New API Project</strong>
-                        <small>
-                            Upload source or API definition
-                        </small>
-                    </div>
-
-                    <b>›</b>
-                </a>
-
-
-                <a href="/projects"
-                   class="qa-quick-action">
-
-                    <span>▱</span>
-
-                    <div>
-                        <strong>Open Projects</strong>
-                        <small>
-                            Continue discovery or testing
-                        </small>
-                    </div>
-
-                    <b>›</b>
-                </a>
-
-
-                <a href="/projects/new"
-                   class="qa-quick-action">
-
-                    <span>⇧</span>
-
-                    <div>
-                        <strong>Import API Definition</strong>
-                        <small>
-                            OpenAPI, Swagger or Postman
-                        </small>
-                    </div>
-
-                    <b>›</b>
-                </a>
-
-
-                <a href="/security/mfa"
-                   class="qa-quick-action">
-
-                    <span>⚙</span>
-
-                    <div>
-                        <strong>Security Settings</strong>
-                        <small>
-                            MFA and account protection
-                        </small>
-                    </div>
-
-                    <b>›</b>
-                </a>
-
-            </div>
-
-        </article>
-
-    </div>
-
 </section>
 """
-
-    return layout(
-        "Dashboard",
-        content,
-        request,
-        public=False,
-    )
+    return layout("Dashboard", content, request, public=False)
 
 
 @app.get("/project-upload-placeholder")

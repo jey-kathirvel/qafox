@@ -490,8 +490,8 @@ def layout(
 <link rel="apple-touch-icon"
       sizes="192x192"
       href="/static/icons/qafox-192.png">
-<link rel="stylesheet" href="/static/app.css?v=glass008">
-<script src="/static/app.js?v=glass008" defer></script>
+<link rel="stylesheet" href="/static/app.css?v=glass003">
+<script src="/static/app.js?v=glass003" defer></script>
 </head>
 <body class="{body_class}">
 {sidebar}
@@ -523,36 +523,6 @@ def layout(
     </nav>
     <div class="topbar-end">
         {account}
-        <div class="qa-font-controls"
-             role="group"
-             aria-label="Font size">
-
-            <button type="button"
-                    class="qa-font-button"
-                    data-font-size="compact"
-                    aria-label="Decrease font size"
-                    title="Decrease font size">
-                A−
-            </button>
-
-            <button type="button"
-                    class="qa-font-button is-active"
-                    data-font-size="normal"
-                    aria-label="Normal font size"
-                    title="Normal font size">
-                A
-            </button>
-
-            <button type="button"
-                    class="qa-font-button"
-                    data-font-size="large"
-                    aria-label="Increase font size"
-                    title="Increase font size">
-                A+
-            </button>
-
-        </div>
-
         <button type="button"
                 class="pwa-install-button"
                 data-pwa-install
