@@ -70,8 +70,14 @@ class SemanticGeneratorTests(TestCase):
         self.assertTrue(value["email"].endswith("@example.test"))
         self.assertIs(value["active"], False)
 
-    def test_unsynthesizable_pattern_requires_review(self):
+    def test_synthesizable_pattern_is_generated(self):
         field = FieldContract("code", data_type="string", required=True, pattern=r"[A-Z]{3}[0-9]{4}")
+        result = generate_field(field)
+        self.assertRegex(result.value, r"^[A-Z]{3}[0-9]{4}$")
+        self.assertEqual(result.status, "ready")
+
+    def test_unsynthesizable_pattern_requires_review(self):
+        field = FieldContract("code", data_type="string", required=True, pattern=r"(?<=foo)[A-Z]{3}")
         result = generate_field(field)
         self.assertEqual(result.value, "{{REQUIRED:request.code}}")
         self.assertEqual(result.status, "review-recommended")
