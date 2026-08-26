@@ -25,6 +25,7 @@ from fastapi.responses import (
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.main import (
     csrf_token,
     csrf_valid,
@@ -33,11 +34,14 @@ from app.main import (
     esc,
     layout,
 )
+from app.project_ingestion import IngestionRejected, ingest_git_repository
+from app.technology_detection import detect_technologies, persist_technology_report
 
 router = APIRouter()
 
-PROJECT_ROOT = Path("/opt/qafox/data/projects")
-STAGING_ROOT = Path("/opt/qafox/data/staging")
+settings = get_settings()
+PROJECT_ROOT = settings.project_root
+STAGING_ROOT = settings.staging_root
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
@@ -108,6 +112,14 @@ def safe_filename(filename: str | None) -> str:
         cleaned = "project-upload"
 
     return cleaned[:220]
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def detect_file_type(filename: str) -> str:
@@ -1616,7 +1628,7 @@ def new_project_page(
         </span>
         <h2>Create private project</h2>
         <p>
-            Upload an archive, OpenAPI file or Postman collection.
+            Upload an archive/API definition or fetch a public HTTPS Git repository.
         </p>
 
         {notice}
@@ -1660,10 +1672,31 @@ def new_project_page(
             </select>
         </label>
 
+        <label>
+            Project source
+            <select name="source_type">
+                <option value="upload" selected>File upload</option>
+                <option value="git">Git repository</option>
+            </select>
+        </label>
+
+        <label>
+            HTTPS Git repository <small>Required for Git source</small>
+            <input name="repository_url"
+                   maxlength="1000"
+                   placeholder="https://github.com/organization/repository.git">
+        </label>
+
+        <label>
+            Git branch
+            <input name="default_branch"
+                   maxlength="200"
+                   value="main">
+        </label>
+
         <label class="file-drop">
             <input type="file"
                    name="project_file"
-                   required
                    accept=".zip,.tar,.gz,.tgz,.json,.yaml,.yml">
 
             <span class="file-drop-icon">⇧</span>
@@ -1711,9 +1744,12 @@ async def create_project(
     project_name: str = Form(...),
     description: str = Form(""),
     environment: str = Form("testing"),
+    source_type: str = Form("upload"),
+    repository_url: str = Form(""),
+    default_branch: str = Form("main"),
     upload_confirmation: str = Form(""),
     csrf: str = Form(...),
-    project_file: UploadFile = File(...),
+    project_file: UploadFile | None = File(None),
 ):
     user = current_user(request)
 
@@ -1733,6 +1769,7 @@ async def create_project(
     project_name = project_name.strip()
     description = description.strip()
     environment = environment.strip().lower()
+    source_type = source_type.strip().lower()
 
     if len(project_name) < 2:
         return RedirectResponse(
@@ -1748,6 +1785,20 @@ async def create_project(
             status_code=303,
         )
 
+    if source_type not in {"upload", "git"}:
+        return RedirectResponse(
+            "/projects/new?message=Choose+a+valid+project+source.",
+            status_code=303,
+        )
+
+    if source_type == "upload" and (
+        project_file is None or not project_file.filename
+    ):
+        return RedirectResponse(
+            "/projects/new?message=Choose+a+project+file.",
+            status_code=303,
+        )
+
     if upload_confirmation != "yes":
         return RedirectResponse(
             "/projects/new?"
@@ -1755,8 +1806,10 @@ async def create_project(
             status_code=303,
         )
 
-    original_filename = safe_filename(
-        project_file.filename
+    original_filename = (
+        safe_filename(project_file.filename)
+        if source_type == "upload" and project_file is not None
+        else "repository-source.tar"
     )
     public_id = str(uuid.uuid4())
     staging_directory = (
@@ -1776,20 +1829,29 @@ async def create_project(
     )
 
     try:
-        file_type = detect_file_type(
-            original_filename
-        )
-
-        staging_directory.mkdir(
-            parents=True,
-            exist_ok=False,
-        )
-        os.chmod(staging_directory, 0o700)
-
-        file_size, sha256 = await save_upload(
-            project_file,
-            staging_file,
-        )
+        commit_sha = None
+        normalized_repository_url = None
+        normalized_branch = None
+        if source_type == "git":
+            git_result = ingest_git_repository(
+                repository_url,
+                default_branch,
+                staging_directory,
+                timeout_seconds=settings.git_timeout_seconds,
+            )
+            normalized_repository_url = git_result.repository_url
+            normalized_branch = git_result.branch
+            commit_sha = git_result.commit_sha
+            staging_file = git_result.archive_path
+            original_filename = "repository-source.tar"
+            file_type = "tar"
+            file_size = staging_file.stat().st_size
+            sha256 = sha256_file(staging_file)
+        else:
+            file_type = detect_file_type(original_filename)
+            staging_directory.mkdir(parents=True, exist_ok=False)
+            os.chmod(staging_directory, 0o700)
+            file_size, sha256 = await save_upload(project_file, staging_file)
 
         original_directory = (
             project_directory / "original"
@@ -1893,8 +1955,9 @@ async def create_project(
                     ),
                     "file_type": file_type,
                     "content_type": (
-                        project_file.content_type
-                        or "application/octet-stream"
+                        (project_file.content_type or "application/octet-stream")
+                        if project_file is not None and source_type == "upload"
+                        else "application/x-tar"
                     )[:150],
                     "file_size_bytes": file_size,
                     "sha256": sha256,
@@ -1914,6 +1977,44 @@ async def create_project(
             db.execute(
                 text(
                     """
+                    INSERT INTO project_sources (
+                        project_id, owner_user_id, source_type,
+                        repository_url, default_branch, commit_sha,
+                        authorization_confirmed_at,
+                        authorization_confirmed_by, created_at
+                    ) VALUES (
+                        :project_id, :owner_user_id, :source_type,
+                        :repository_url, :default_branch, :commit_sha,
+                        :confirmed_at, :confirmed_by, :created_at
+                    )
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "owner_user_id": user.id,
+                    "source_type": source_type,
+                    "repository_url": normalized_repository_url,
+                    "default_branch": normalized_branch,
+                    "commit_sha": commit_sha,
+                    "confirmed_at": now,
+                    "confirmed_by": user.id,
+                    "created_at": now,
+                },
+            )
+
+            technology_report = detect_technologies(extracted_directory)
+            persist_technology_report(
+                db,
+                project_id=project_id,
+                owner_user_id=user.id,
+                source_sha256=sha256,
+                report=technology_report,
+                commit=False,
+            )
+
+            db.execute(
+                text(
+                    """
                     INSERT INTO project_audit_events (
                         project_id,
                         owner_user_id,
@@ -1924,7 +2025,7 @@ async def create_project(
                     VALUES (
                         :project_id,
                         :owner_user_id,
-                        'project-uploaded',
+                        :event_type,
                         :event_summary,
                         :created_at
                     )
@@ -1933,9 +2034,13 @@ async def create_project(
                 {
                     "project_id": project_id,
                     "owner_user_id": user.id,
+                    "event_type": (
+                        "project-repository-ingested"
+                        if source_type == "git"
+                        else "project-uploaded"
+                    ),
                     "event_summary": (
-                        "Project uploaded and passed "
-                        "archive safety validation."
+                        "Project source passed static ingestion and archive safety validation."
                     ),
                     "created_at": now,
                 },
@@ -1943,7 +2048,7 @@ async def create_project(
 
             db.commit()
 
-    except UploadRejected as exc:
+    except (UploadRejected, IngestionRejected) as exc:
         shutil.rmtree(
             staging_directory,
             ignore_errors=True,
@@ -1977,7 +2082,8 @@ async def create_project(
         )
 
     finally:
-        await project_file.close()
+        if project_file is not None:
+            await project_file.close()
 
     return RedirectResponse(
         f"/projects/{public_id}",
@@ -2813,6 +2919,26 @@ def project_detail(
 
                         <b>›</b>
 
+                    </a>
+
+                    <a class="qa-project-action"
+                       href="/projects/{esc(public_id)}/security">
+                        <span>◇</span>
+                        <div>
+                            <strong>Security Findings</strong>
+                            <small>Semgrep, Trivy and Gitleaks results</small>
+                        </div>
+                        <b>›</b>
+                    </a>
+
+                    <a class="qa-project-action"
+                       href="/projects/{esc(public_id)}/performance">
+                        <span>◷</span>
+                        <div>
+                            <strong>Performance Tests</strong>
+                            <small>Generate k6 scenarios and inspect exact metrics</small>
+                        </div>
+                        <b>›</b>
                     </a>
 
 

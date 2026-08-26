@@ -12,6 +12,7 @@ from app.smart_data.adapters.community import (
 )
 from app.smart_data.adapters.fastapi import FastAPIAdapter
 from app.smart_data.adapters.flask import FlaskAdapter
+from app.smart_data.adapters.generic import GenericAdapter
 from app.smart_data.adapters.openapi import OpenAPIAdapter
 from app.smart_data.adapters.postman import PostmanAdapter
 from app.smart_data.adapters.registry import AdapterRegistry
@@ -30,5 +31,6 @@ def default_registry() -> AdapterRegistry:
             SpringAdapter(),
             LaravelAdapter(),
             AspNetAdapter(),
+            GenericAdapter(),
         )
     )

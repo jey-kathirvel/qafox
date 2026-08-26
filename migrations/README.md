@@ -1,6 +1,22 @@
 # QAFox schema patches
 
-There is no Alembic history yet. Apply numbered SQL patches with a least-privileged PostgreSQL role after a schema-only backup.
+Alembic now manages the universal quality-run and worker-job foundation. Existing
+numbered SQL patches remain the historical migration path for legacy tables.
+
+Apply current Alembic migrations with a least-privileged PostgreSQL role:
+
+```bash
+alembic upgrade head
+```
+
+The Alembic revisions are additive. They create `quality_test_runs`,
+`worker_jobs`, normalized `project_sources` metadata, and versioned
+`technology_detection_runs`, `security_scan_runs`, normalized
+`security_findings`, inspectable k6 artifacts, cancellation state, and exact
+overall/per-endpoint performance metrics without rewriting existing projects, discovery, API
+execution, or smart-data tables. Existing
+numbered SQL patches should still be applied as documented below when
+provisioning the corresponding legacy feature.
 
 ## PATCH-QAFOX-004B1A-6
 

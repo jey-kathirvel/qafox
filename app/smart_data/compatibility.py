@@ -251,7 +251,8 @@ def collect_adapter_contracts(project: ProjectRef) -> AdapterCollection:
     registry = default_registry()
     collected = AdapterCollection()
     seen: dict[tuple[str, str], RouteContract] = {}
-    for adapter in registry.all():
+    generic = registry.get("generic")
+    for adapter in (item for item in registry.all() if item.name != "generic"):
         detection = adapter.detect(project)
         collected.detections.append(detection)
         if not detection.detected:
@@ -262,6 +263,14 @@ def collect_adapter_contracts(project: ProjectRef) -> AdapterCollection:
             current = seen.get(key)
             if current is None or _route_richness(route) > _route_richness(current):
                 seen[key] = route
+    if not seen and generic is not None:
+        detection = generic.detect(project)
+        collected.detections.append(detection)
+        if detection.detected:
+            for route in generic.discover_routes(project):
+                seen[comparison_key(route.method, route.path)] = route
+    elif generic is not None:
+        collected.detections.append(DetectionResult("generic", False, 0))
     collected.routes = list(seen.values())
     return collected
 

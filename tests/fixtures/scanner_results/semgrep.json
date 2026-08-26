@@ -1,0 +1,22 @@
+{
+  "version": "1.100.0",
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.sql-injection",
+      "path": "app/search.py",
+      "start": {"line": 42, "col": 5},
+      "extra": {
+        "message": "User input reaches a dynamically constructed SQL query.",
+        "severity": "ERROR",
+        "lines": "cursor.execute(\"SELECT * FROM x WHERE id=\" + user_id)",
+        "metadata": {
+          "category": "security",
+          "confidence": "HIGH",
+          "cwe": ["CWE-89"],
+          "owasp": ["A03:2021 - Injection"],
+          "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+        }
+      }
+    }
+  ]
+}

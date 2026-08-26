@@ -1,11 +1,11 @@
 import json
-import base64
 import html
 import os
 import secrets
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
@@ -13,35 +13,26 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pwdlib import PasswordHash
-from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, or_, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy import Boolean, DateTime, Integer, String, or_, text
+from sqlalchemy.orm import Mapped, Session, mapped_column
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.config import get_settings
+from app.database import Base, engine
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-SECRET_KEY = os.environ["QAFOX_SECRET_KEY"]
-DOMAIN = os.getenv("QAFOX_DOMAIN", "qafox.ads-ai.in")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME)
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "QAFox")
-SMTP_PASSWORD = base64.b64decode(
-    os.environ["SMTP_PASSWORD_B64"]
-).decode("utf-8")
-
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=300,
-)
+settings = get_settings()
+DATABASE_URL = settings.database_url
+SECRET_KEY = settings.secret_key
+DOMAIN = settings.domain
+SMTP_HOST = settings.smtp_host
+SMTP_PORT = settings.smtp_port
+SMTP_USERNAME = settings.smtp_username
+SMTP_FROM_EMAIL = settings.smtp_from_email
+SMTP_FROM_NAME = settings.smtp_from_name
+SMTP_PASSWORD = settings.smtp_password
 
 password_hash = PasswordHash.recommended()
 serializer = URLSafeTimedSerializer(SECRET_KEY)
-
-
-class Base(DeclarativeBase):
-    pass
 
 
 class User(Base):
@@ -142,7 +133,7 @@ app.add_middleware(
 
 app.mount(
     "/static",
-    StaticFiles(directory="/opt/qafox/static"),
+    StaticFiles(directory=Path(__file__).resolve().parent.parent / "static"),
     name="static",
 )
 
@@ -318,7 +309,7 @@ def layout(
                     <span class="qa-sidebar-fox">🦊</span>
                     <div>
                         <strong>QA<span>Fox</span></strong>
-                        <small>Universal QA Platform</small>
+                        <small>API Quality Platform</small>
                     </div>
                 </a>
             </div>
@@ -360,37 +351,26 @@ def layout(
                         </small>
                     </a>
 
-                    <div class="qa-module-row is-disabled">
-                        <span class="qa-module-dot"></span>
-                        <span>Web Testing</span>
-                        <small class="qa-status-chip">
-                            Planned
-                        </small>
-                    </div>
+                    <a href="/projects"
+                       class="qa-module-row{side_active('/projects')}">
+                        <span class="qa-module-dot active"></span>
+                        <span>API Discovery</span>
+                        <small class="qa-status-chip active">Active</small>
+                    </a>
 
-                    <div class="qa-module-row is-disabled">
-                        <span class="qa-module-dot"></span>
-                        <span>Mobile Testing</span>
-                        <small class="qa-status-chip">
-                            Planned
-                        </small>
-                    </div>
+                    <a href="/projects"
+                       class="qa-module-row{side_active('/projects')}">
+                        <span class="qa-module-dot active"></span>
+                        <span>Security Analysis</span>
+                        <small class="qa-status-chip active">Active</small>
+                    </a>
 
-                    <div class="qa-module-row is-disabled">
-                        <span class="qa-module-dot"></span>
+                    <a href="/projects"
+                       class="qa-module-row{side_active('/projects')}">
+                        <span class="qa-module-dot active"></span>
                         <span>Performance</span>
-                        <small class="qa-status-chip">
-                            Planned
-                        </small>
-                    </div>
-
-                    <div class="qa-module-row is-disabled">
-                        <span class="qa-module-dot"></span>
-                        <span>Security Testing</span>
-                        <small class="qa-status-chip">
-                            Planned
-                        </small>
-                    </div>
+                        <small class="qa-status-chip active">Active</small>
+                    </a>
 
                 </div>
 
@@ -399,30 +379,6 @@ def layout(
                 </div>
 
                 <nav class="qa-sidebar-nav">
-
-                    <div class="qa-sidebar-link is-disabled">
-                        <span class="qa-sidebar-icon">▶</span>
-                        <span>Executions</span>
-                        <small>Soon</small>
-                    </div>
-
-                    <div class="qa-sidebar-link is-disabled">
-                        <span class="qa-sidebar-icon">▤</span>
-                        <span>Reports</span>
-                        <small>Soon</small>
-                    </div>
-
-                    <div class="qa-sidebar-link is-disabled">
-                        <span class="qa-sidebar-icon">▦</span>
-                        <span>Test Data</span>
-                        <small>Soon</small>
-                    </div>
-
-                    <div class="qa-sidebar-link is-disabled">
-                        <span class="qa-sidebar-icon">⌘</span>
-                        <span>Environments</span>
-                        <small>Soon</small>
-                    </div>
 
                     <a href="/security/mfa"
                        class="qa-sidebar-link{side_active('/security')}">
@@ -673,9 +629,8 @@ def home(request: Request):
         <span class="pill">PRIVACY-FIRST QUALITY ENGINEERING</span>
         <h1>Hunt issues.<br><em>Ship quality.</em></h1>
         <p>
-            Discover and test APIs today. Expand into manual,
-            automation, security, performance and accessibility
-            testing tomorrow.
+            Discover, validate, secure and performance-test APIs
+            from one focused quality engineering workspace.
         </p>
         <div class="hero-actions">
             <a class="primary-button" href="/signup">
@@ -872,39 +827,34 @@ def home(request: Request):
 
 <section class="toolkit">
     <div class="section-heading">
-        <span>QUALITY ENGINEERING PLATFORM</span>
-        <h2>One workspace. Every testing discipline.</h2>
+        <span>API QUALITY ENGINEERING PLATFORM</span>
+        <h2>Everything needed to understand and test your APIs.</h2>
     </div>
     <div class="cards">
         <article class="active-card">
-            <i>↗</i><b>Available first</b>
+            <i>↗</i><b>Available now</b>
             <h3>API Testing</h3>
             <p>API discovery, audit, execution and detailed reports.</p>
         </article>
         <article>
-            <i>✓</i><b>Coming next</b>
-            <h3>Manual Testing</h3>
-            <p>Test cases, plans, execution, evidence and traceability.</p>
+            <i>⌁</i><b>Available now</b>
+            <h3>Technology Discovery</h3>
+            <p>Static project detection with evidence and confidence scores.</p>
         </article>
         <article>
-            <i>⚙</i><b>Roadmap</b>
-            <h3>Automation Testing</h3>
-            <p>Web and mobile automation with reusable test suites.</p>
+            <i>◎</i><b>Available now</b>
+            <h3>Route Discovery</h3>
+            <p>Normalized API contracts across supported frameworks and definitions.</p>
         </article>
         <article>
-            <i>♢</i><b>Roadmap</b>
+            <i>♢</i><b>Available now</b>
             <h3>Security Testing</h3>
-            <p>OWASP checks, secrets detection and dependency insights.</p>
+            <p>Static analysis, secrets detection and dependency insights.</p>
         </article>
         <article>
-            <i>ϟ</i><b>Roadmap</b>
+            <i>ϟ</i><b>Available now</b>
             <h3>Performance Testing</h3>
-            <p>Load, stress, spike and response-time analysis.</p>
-        </article>
-        <article>
-            <i>◉</i><b>Roadmap</b>
-            <h3>Accessibility</h3>
-            <p>Inclusive experience checks and actionable guidance.</p>
+            <p>Inspectable k6 scenarios with exact endpoint latency metrics.</p>
         </article>
     </div>
 </section>
@@ -3041,3 +2991,15 @@ from app.test_configuration import (
 )
 
 app.include_router(test_configuration_router)
+
+
+# Normalized Semgrep, Trivy, and Gitleaks findings
+from app.security_routes import router as security_routes_router
+
+app.include_router(security_routes_router)
+
+
+# Deterministic k6 performance artifacts and exact metrics
+from app.performance_routes import router as performance_routes_router
+
+app.include_router(performance_routes_router)

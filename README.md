@@ -6,13 +6,16 @@ QAFox is an open-source, AI-first quality-engineering workspace for discovering,
 
 ## Product direction
 
-QAFox starts with API testing and is intended to expand into manual, automation, security, performance, mobile, and accessibility testing. Its core principle is to reduce manual intervention while keeping every inferred value editable and every state-changing action explicitly controlled.
+QAFox is focused on API quality engineering: project intake, technology and route discovery, API execution, static security analysis, and authorized performance testing. Its core principle is to reduce manual intervention while keeping every inferred value editable and every state-changing action explicitly controlled.
 
 ## Current capabilities
 
 - Private signup, login, email verification, recovery, password/passcode support, MFA, and one-time recovery codes
 - Account-isolated projects, uploads, reports, configurations, execution plans, and audit history
 - Secure ZIP, TAR, TAR.GZ, TGZ, OpenAPI, and Postman Collection uploads
+- Public HTTPS Git repository ingestion with branch and commit provenance
+- Versioned technology detection with confidence and file evidence
+- Worker-isolated Semgrep SAST, Trivy dependency/configuration, and Gitleaks secret scanning
 - Archive traversal, symlink, device-file, and compression-bomb protection
 - Static API discovery and inventory with JSON/CSV export
 - Framework-aware route composition and API-prefix inference
@@ -43,9 +46,21 @@ The smart-data pipeline should:
 
 FastAPI, Flask, Express, NestJS, Django, Spring, Laravel, and ASP.NET Core source adapters inspect uploaded text without executing it. Nested Express `use()` mounts, Nest `@Controller` paths, and Django `include()` prefixes are composed from static strings. OpenAPI and Postman remain framework-neutral sources.
 
+The technology inventory also recognizes Python, JavaScript/TypeScript, Java,
+.NET, PHP, Ruby, Go, Rust, package managers, runtimes, databases,
+containerization, authentication hints, API styles, and frontend frameworks from
+bounded manifest/source evidence.
+
+Route discovery passes every adapter through one canonical boundary before
+persistence. HTTP methods are validated, framework parameter syntax is converted
+to `{name}`, duplicate method/path pairs are resolved by contract richness, and
+a conservative generic static scanner is used only when no supported framework
+or API-definition adapter finds routes.
+
 ## Safety model
 
 - Uploaded source code is inspected statically and is never executed.
+- Git sources are fetched into a bare repository and exported without checkout.
 - Every database query and filesystem path must be scoped to the authenticated owner.
 - Secrets are encrypted at rest and masked in screens, logs, and reports.
 - Public HTTPS targets are required; private, loopback, metadata, and unsafe redirect targets are blocked.
@@ -149,6 +164,32 @@ Then open `http://127.0.0.1:8091` and verify:
 curl --fail http://127.0.0.1:8091/health
 ```
 
+Apply migrations and run the durable worker as separate processes:
+
+```bash
+alembic upgrade head
+python -m app.worker
+```
+
+The worker handles static security and authorized k6 performance jobs and fails
+all unknown job types closed. Performance scripts are deterministic artifacts;
+the target URL and load settings remain editable configuration. Only public
+HTTPS targets are accepted, explicit authorization is persisted, cancellation
+and hard timeouts are enforced, and secrets are never embedded in generated
+scripts. Install `k6` on performance workers; a missing binary fails explicitly
+and is never reported as a successful run.
+
+Static security jobs run outside the web process. Install `semgrep`, `trivy`,
+and `gitleaks` on the worker host and keep their rule/vulnerability databases
+updated. Missing tools are recorded as `UNAVAILABLE`; they are never reported as
+a clean scan. Gitleaks output is requested with redaction and QAFox persists only
+masked evidence, never the discovered secret value.
+
+Git intake currently supports public, credential-free HTTPS repositories. It
+rejects redirects, embedded credentials, private/loopback hosts, unsafe branch
+names, and non-HTTPS Git protocols. Private-repository credentials will be added
+later through an encrypted provider integration rather than URL-embedded tokens.
+
 ## Production deployment
 
 Run QAFox as a non-root system user behind a TLS-terminating reverse proxy. Bind Uvicorn only to loopback; do not expose it directly to the internet.
@@ -195,7 +236,7 @@ Also verify application import, registered routes, database connectivity, `/heal
 - Contract, schema, security, and performance assertions
 - Framework fixture matrix and golden-result regression suite
 - Manual test management and reusable automation suites
-- Security, performance, mobile, and accessibility modules
+- Deeper API security and performance analysis
 - Rich reports, trends, integrations, and team workflows
 
 ## Privacy

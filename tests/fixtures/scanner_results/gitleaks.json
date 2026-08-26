@@ -1,0 +1,12 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Generic API Key",
+    "File": "config/settings.py",
+    "StartLine": 8,
+    "Secret": "super-secret-value-that-must-never-persist",
+    "Match": "API_KEY=super-secret-value-that-must-never-persist",
+    "Entropy": 4.9,
+    "Tags": ["key", "API"]
+  }
+]

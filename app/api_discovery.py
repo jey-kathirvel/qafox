@@ -20,13 +20,11 @@ from sqlalchemy.orm import Session
 from app.smart_data.compatibility import (
     AdapterCollection,
     ComparisonReport,
-    collect_adapter_contracts,
-    inventory_item_from_route,
-    merge_legacy_and_adapter,
 )
 from app.smart_data.contracts import ProjectRef
 from app.smart_data.persistence import PersistenceIsolationError, persist_contracts
 from app.smart_data.serialization import UnsafeSecretError
+from app.route_discovery import discover_normalized_routes
 
 from app.main import (
     csrf_token,
@@ -1316,24 +1314,24 @@ def run_api_discovery(
                 project_public_id=public_id,
             )
             try:
-                adapter_collection = collect_adapter_contracts(
-                    project_ref
-                )
-                adapter_items = [
-                    inventory_item_from_route(route)
-                    for route in adapter_collection.routes
-                ]
-                endpoints, comparison = merge_legacy_and_adapter(
+                route_report = discover_normalized_routes(
+                    project_ref,
                     discovery["endpoints"],
-                    adapter_items,
-                    adapter_collection.detections,
                 )
+                endpoints = list(route_report.inventory)
+                comparison = route_report.comparison
+                routes_to_persist = route_report.routes
+                fixtures_to_persist = route_report.fixtures
+                adapter_names = route_report.adapter_names
             except Exception:
                 adapter_collection = AdapterCollection()
                 endpoints = list(discovery["endpoints"])
                 comparison = ComparisonReport(
                     legacy_only=len(endpoints),
                 )
+                routes_to_persist = ()
+                fixtures_to_persist = ()
+                adapter_names = ()
             frameworks = Counter(
                 item["framework"]
                 for item in endpoints
@@ -1452,13 +1450,9 @@ def run_api_discovery(
                         owner_user_id=user.id,
                         project_id=project["id"],
                         discovery_run_id=int(run_id),
-                        routes=adapter_collection.routes,
-                        fixtures=adapter_collection.fixtures,
-                        adapter_names=tuple(
-                            detection.framework
-                            for detection in adapter_collection.detections
-                            if detection.detected
-                        ),
+                        routes=routes_to_persist,
+                        fixtures=fixtures_to_persist,
+                        adapter_names=adapter_names,
                     )
             except (
                 SQLAlchemyError,

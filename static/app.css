@@ -16774,3 +16774,161 @@ summary small {
 }
 
 /* END PATCH-QAFOX-TOOLS-004A */
+
+/* BEGIN QAFOX OCEAN LIGHT THEME
+   Focused API-quality product surface. */
+
+:root {
+    --qa-saffron: #0284c7;
+    --qa-saffron-strong: #0369a1;
+    --qa-saffron-soft: #e0f2fe;
+    --qa-saffron-pale: #f0f9ff;
+    --qa-navy: #0c4a6e;
+    --qa-navy-2: #075985;
+    --qa-text: #123b55;
+    --qa-text-soft: #47677b;
+    --qa-muted: #6b8798;
+    --qa-blue: #0284c7;
+    --qa-blue-soft: #e0f2fe;
+    --qa-purple: #0891b2;
+    --qa-purple-soft: #cffafe;
+    --qa-bg: #eff8fc;
+    --qa-line: rgba(14, 116, 144, .16);
+    --qa-line-strong: rgba(3, 105, 161, .25);
+    --qa-shadow-sm: 0 4px 14px rgba(12, 74, 110, .06);
+    --qa-shadow: 0 14px 38px rgba(12, 74, 110, .09);
+    --qa-shadow-lg: 0 26px 70px rgba(12, 74, 110, .13);
+    --qa-shadow-saffron: 0 10px 24px rgba(2, 132, 199, .24);
+    --navy: var(--qa-navy);
+    --orange: var(--qa-saffron);
+    --coral: #0e7490;
+    --violet: var(--qa-purple);
+    --background: var(--qa-bg);
+}
+
+html,
+body {
+    background-color: var(--qa-bg);
+}
+
+body {
+    background:
+        radial-gradient(circle at 5% 2%, rgba(56, 189, 248, .18), transparent 27rem),
+        radial-gradient(circle at 96% 8%, rgba(14, 165, 233, .12), transparent 32rem),
+        radial-gradient(circle at 58% 95%, rgba(6, 182, 212, .09), transparent 34rem),
+        linear-gradient(135deg, #f8fcff 0%, #eaf7fc 50%, #f4fbfe 100%);
+    background-attachment: fixed;
+}
+
+::selection {
+    color: #082f49;
+    background: rgba(56, 189, 248, .28);
+}
+
+.topbar,
+.qa-sidebar,
+.qa-project-tabs {
+    border-color: rgba(14, 116, 144, .14);
+    background: rgba(255, 255, 255, .82);
+    box-shadow: 0 12px 34px rgba(12, 74, 110, .08);
+}
+
+.brand strong span,
+.qa-sidebar-brand-link strong span,
+.hero h1 em,
+.qa-card-heading > div > span,
+.qa-workflow-percent,
+.qa-project-breadcrumb:hover {
+    color: var(--qa-saffron);
+}
+
+.site-nav-link:hover,
+.site-nav-link.is-active,
+.qa-sidebar-link:hover,
+.qa-sidebar-link.is-active,
+.qa-module-row:hover,
+.qa-module-row.is-active,
+.qa-project-tab:hover,
+.qa-project-tab.is-active {
+    color: #0369a1;
+    background: linear-gradient(135deg, #e0f2fe, rgba(255, 255, 255, .9));
+}
+
+.user-chip > span,
+.qa-sidebar-avatar {
+    color: #075985;
+    border-color: rgba(2, 132, 199, .2);
+    background: linear-gradient(145deg, #e0f2fe, #bae6fd);
+}
+
+.hero {
+    background:
+        radial-gradient(circle at 88% 5%, rgba(56, 189, 248, .20), transparent 29%),
+        radial-gradient(circle at 7% 96%, rgba(6, 182, 212, .10), transparent 33%),
+        linear-gradient(145deg, rgba(255,255,255,.94), rgba(240,249,255,.76));
+}
+
+.hero .pill,
+.pill,
+.pill.dark,
+.section-heading span,
+.dashboard-header > div > span,
+.welcome-panel > span,
+.auth-kicker {
+    color: #0369a1;
+    border-color: rgba(2, 132, 199, .16);
+    background: rgba(224, 242, 254, .9);
+}
+
+.bubble {
+    color: #075985;
+    border-color: rgba(2, 132, 199, .18);
+    background: #f0f9ff;
+}
+
+.primary-button,
+button.primary-button,
+input[type="submit"],
+button[type="submit"],
+.action-primary,
+.btn-primary {
+    border-color: rgba(3, 105, 161, .20);
+    background: linear-gradient(135deg, #38bdf8 0%, #0284c7 52%, #0369a1 100%) !important;
+    box-shadow: 0 10px 24px rgba(2, 132, 199, .24), inset 0 1px 0 rgba(255,255,255,.34);
+    text-shadow: 0 1px 1px rgba(8, 47, 73, .16);
+}
+
+.primary-button:hover,
+button.primary-button:hover,
+input[type="submit"]:hover,
+button[type="submit"]:hover,
+.action-primary:hover,
+.btn-primary:hover {
+    box-shadow: 0 14px 30px rgba(2, 132, 199, .30), inset 0 1px 0 rgba(255,255,255,.4);
+}
+
+.qa-workflow-progress span {
+    background: linear-gradient(90deg, #38bdf8, #0284c7);
+    box-shadow: 0 0 12px rgba(2, 132, 199, .25);
+}
+
+.qa-project-tab.is-active small,
+.qa-workflow-step.current .qa-step-number {
+    color: #0369a1;
+    background: #bae6fd;
+}
+
+.qa-workflow-step:hover {
+    border-color: rgba(2, 132, 199, .20);
+    background: rgba(240, 249, 255, .72);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: #38bdf8 !important;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, .16) !important;
+    outline: none;
+}
+
+/* END QAFOX OCEAN LIGHT THEME */

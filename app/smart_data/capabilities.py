@@ -11,6 +11,7 @@ from app.smart_data.uapi import AdapterCapability
 C = AdapterCapability
 
 ADAPTER_CAPABILITY_MATRIX: dict[str, frozenset[AdapterCapability]] = {
+    "generic": frozenset({C.ROUTES}),
     "openapi": frozenset(
         {
             C.ROUTES,
@@ -120,6 +121,7 @@ ADAPTER_CAPABILITY_MATRIX: dict[str, frozenset[AdapterCapability]] = {
 }
 
 REGISTERED_ADAPTERS = (
+    "generic",
     "openapi",
     "postman",
     "fastapi",
